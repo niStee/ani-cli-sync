@@ -1,0 +1,151 @@
+# ani-cli-sync
+
+> **Automated AniList synchronization wrapper for [`ani-cli`](https://github.com/pystardust/ani-cli).**
+
+`ani-cli-sync` bridges the gap between your local terminal anime player and your [AniList](https://anilist.co) profile. It provides an interactive `fzf` menu of your active watchlist, automatically launches `ani-cli` at the next unwatched episode, skips intros seamlessly, and updates your progress on AniList upon completion.
+
+---
+
+## ✨ Features
+
+- 📺 **Interactive Watchlist Menu**: Loads your `Currently Watching` list directly from AniList via GraphQL.
+- ⚡ **Auto-Resume & Progression**: Automatically calculates `progress + 1` and plays the correct next episode.
+- 🔄 **Real-Time AniList Sync**: Updates episode progress and auto-transitions completed shows to `COMPLETED`.
+- 🔁 **Continuous Autoplay**: Stream multiple episodes continuously with `--autoplay` / `-a`.
+- ⏭️ **Intro Skipping**: Built-in `ani-skip` integration (can be disabled via `--no-skip`).
+- 🎯 **Smart Disambiguation**: Resolves multi-season naming quirks (e.g. AniDB absolute episode offsets) and matches active watchlist entries over global searches.
+- 📥 **Netflix Import**: Easily import watch history from a `NetflixViewingHistory.csv` export.
+- 📦 **Zero External Python Dependencies**: Built entirely using the Python standard library.
+
+---
+
+## 📋 Prerequisites
+
+- **Python**: `>= 3.10`
+- **[`ani-cli`](https://github.com/pystardust/ani-cli)**: Required for streaming and playback.
+- **[`mpv`](https://mpv.io)**: Video player (used by `ani-cli`).
+- **[`fzf`](https://github.com/junegunn/fzf)**: *(Optional, recommended)* For interactive fuzzy menus.
+- **[`ani-skip`](https://github.com/synacktraa/ani-skip)**: *(Optional)* For automatic opening/ending intro skipping.
+
+---
+
+## 🚀 Installation
+
+### Using `uv` (Recommended)
+
+```bash
+uv tool install git+https://github.com/niStee/ani-cli-sync.git
+```
+
+### Using `pipx`
+
+```bash
+pipx install git+https://github.com/niStee/ani-cli-sync.git
+```
+
+### Using `pip`
+
+```bash
+git clone https://github.com/niStee/ani-cli-sync.git
+cd ani-cli-sync
+pip install .
+```
+
+---
+
+## 🔑 1-Minute AniList Setup
+
+Authenticate `ani-cli-sync` with your AniList account:
+
+```bash
+ani-cli-sync login
+```
+
+1. Open [AniList Developer Settings](https://anilist.co/settings/developer).
+2. Click **Create New Client**:
+   - **Name**: `ani-cli-sync`
+   - **Redirect URL**: `https://anilist.co/api/v2/oauth/pin`
+3. Paste your generated **Client ID** when prompted to open the authorization URL in your browser.
+4. Copy the generated access token from the URL fragment and paste it into the CLI.
+
+Token is saved with `0600` permissions at `~/.config/anilist/token`.
+
+---
+
+## 📖 Usage
+
+### Watch Anime (Interactive or Query)
+
+```bash
+# Interactive fzf picker of Currently Watching shows
+ani-cli-sync
+
+# Watch with continuous autoplay for binge-watching
+ani-cli-sync -a
+
+# Jump directly to a show in your watchlist
+ani-cli-sync frieren
+ani-cli-sync "Cyberpunk: Edgerunners" -q 1080p --dub
+```
+
+### View Active Watchlist
+
+```bash
+ani-cli-sync list
+```
+
+```text
+=== Currently Watching (myusername) ===
+  [03/10] Cyberpunk: Edgerunners
+  [02/12] Dorohedoro
+  [01/13] Uncle from Another World
+  [04/10] Frieren: Beyond Journey’s End Season 2
+```
+
+### Manually Set Progress
+
+```bash
+# Updates active watchlist entries first before falling back to global search
+ani-cli-sync set "Frieren" 4
+```
+
+### Import Netflix History
+
+Export your viewing history from Netflix (`NetflixViewingHistory.csv`) and import:
+
+```bash
+ani-cli-sync import-netflix ~/Downloads/NetflixViewingHistory.csv
+```
+
+---
+
+## ⚙️ CLI Reference
+
+```text
+usage: ani-cli-sync [-h] [-q QUALITY] [-a] [--no-skip] [--dub]
+                    {login,list,set,import-netflix,watch} ...
+
+ani-cli-sync: Automated AniList synchronization wrapper for ani-cli.
+
+positional arguments:
+  {login,list,set,import-netflix,watch}
+    login               Authenticate with AniList
+    list                List currently watching anime from AniList
+    set                 Set episode progress for an anime on AniList
+    import-netflix      Import watch history from Netflix CSV
+    watch               Watch an anime and sync progress
+
+options:
+  -h, --help            show this help message and exit
+  -q, --quality QUALITY
+                        Specify video quality (e.g. 1080p, 720p, best)
+  -a, --autoplay        Automatically play subsequent episodes without prompting
+  --no-skip             Disable ani-skip intro skipping
+  --dub                 Play dubbed version
+```
+
+---
+
+## 📄 License
+
+Distributed under the [MIT License](LICENSE).
