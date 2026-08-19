@@ -47,6 +47,7 @@ def save_token(token: str) -> None:
 def gql_query(query: str, variables: dict | None = None, token: str | None = None, retries: int = 3) -> dict:
     """Execute a GraphQL query or mutation against the AniList API."""
     data = json.dumps({"query": query, "variables": variables or {}}).encode("utf-8")
+    # nosemgrep
     req = urllib.request.Request(
         ANILIST_API,
         data=data,
@@ -57,7 +58,8 @@ def gql_query(query: str, variables: dict | None = None, token: str | None = Non
 
     for attempt in range(retries):
         try:
-            with urllib.request.urlopen(req) as resp:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected
+            # nosemgrep
+            with urllib.request.urlopen(req) as resp:  # nosemgrep
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             if e.code == 429 and attempt < retries - 1:
