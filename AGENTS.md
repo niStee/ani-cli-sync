@@ -8,7 +8,7 @@ Automated AniList synchronization wrapper for [`ani-cli`](https://github.com/pys
 
 - **Stack**: Python `>=3.10` (standard library only, zero external runtime dependencies)
 - **Packaging**: Standard `pyproject.toml` with `hatchling` build backend
-- **Primary Remote**: `git@github.com:niStee/ani-cli-sync.git` (GitHub private)
+- **Primary Remote**: `git@github.com:niStee/ani-cli-sync.git` (GitHub public)
 - **Mirror Remote**: `git@codeberg.org:niStee/ani-cli-sync.git` (Codeberg private mirror)
 - **License**: MIT
 
