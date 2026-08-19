@@ -1,0 +1,11 @@
+{
+  "packages": {
+    ".": {
+      "release-type": "python",
+      "package-name": "ani-cli-sync",
+      "extra-files": [
+        "src/ani_cli_sync/__init__.py"
+      ]
+    }
+  }
+}
