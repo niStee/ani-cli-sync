@@ -1,5 +1,15 @@
 # ani-cli-sync
 
+<p align="left">
+  <a href="https://github.com/niStee/ani-cli-sync/releases"><img src="https://img.shields.io/github/v/release/niStee/ani-cli-sync?style=flat&logo=github&color=blue" alt="Latest Release"></a>
+  <a href="https://github.com/niStee/ani-cli-sync/actions/workflows/ci.yml"><img src="https://github.com/niStee/ani-cli-sync/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI Pipeline"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/niStee/ani-cli-sync"><img src="https://api.scorecard.dev/projects/github.com/niStee/ani-cli-sync/badge" alt="OpenSSF Scorecard"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white" alt="Python 3.10+"></a>
+  <a href="https://img.shields.io/badge/Dependencies-0%20(Standard%20Library)-success"><img src="https://img.shields.io/badge/Dependencies-0%20(Standard%20Library)-success" alt="Zero Dependencies"></a>
+  <a href="https://codeberg.org/niStee/ani-cli-sync"><img src="https://img.shields.io/badge/Mirror-Codeberg-2185d0?style=flat&logo=codeberg&logoColor=white" alt="Codeberg Mirror"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat" alt="License: MIT"></a>
+</p>
+
 > **Automated AniList synchronization wrapper for [`ani-cli`](https://github.com/pystardust/ani-cli).**
 
 `ani-cli-sync` bridges the gap between your local terminal anime player and your [AniList](https://anilist.co) profile. It provides an interactive `fzf` menu of your active watchlist, automatically launches `ani-cli` at the next unwatched episode, skips intros seamlessly, and updates your progress on AniList upon completion.
