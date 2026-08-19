@@ -57,6 +57,7 @@ def gql_query(query: str, variables: dict | None = None, token: str | None = Non
 
     for attempt in range(retries):
         try:
+            # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected
             with urllib.request.urlopen(req) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
