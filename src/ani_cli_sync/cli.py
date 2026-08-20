@@ -460,14 +460,21 @@ def cmd_watch(
 
     curr_ep_to_play = next_ep
     while True:
-        # Check if season offset is needed (e.g. Frieren Season 2 numbered 29-38 on AniDB)
+        # Check if season offset is needed (e.g. Frieren Season 2 numbered 29-38, Slime Season 2 numbered 25-48 on AniDB)
         search_arg = title_search
         ep_arg = curr_ep_to_play
         if "Season 2" in display_part and "Frieren" in display_part and ep_arg <= 10:
             ep_arg = ep_arg + 28  # Map 1 -> 29
+        elif "Season 2" in display_part and ("Slime" in display_part or "Tensei" in display_part) and ep_arg <= 12:
+            search_arg = "That Time I Got Reincarnated as a Slime Season 2"
+            if "Part 2" in display_part:
+                search_arg = "That Time I Got Reincarnated as a Slime Season 2 Part 2"
+                ep_arg = ep_arg + 36  # Map 1 -> 37
+            else:
+                ep_arg = ep_arg + 24  # Map 1 -> 25
 
         print(f"\n▶ Launching ani-cli for '{search_arg}' Episode {ep_arg}...")
-        cmd = ["ani-cli", "--exit-after-play"]
+        cmd = ["ani-cli", "--exit-after-play", "-S", "1"]
         if skip_intro:
             cmd.append("--skip")
         if dub:
