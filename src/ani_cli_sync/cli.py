@@ -483,9 +483,18 @@ def cmd_watch(
             cmd.extend(["-q", quality])
         cmd.extend(["-e", str(ep_arg), search_arg])
 
+        t_start = time.time()
         ret = subprocess.run(cmd)
+        elapsed = time.time() - t_start
 
         if ret.returncode == 0:
+            # If user watched less than 10 minutes (600s), they quit the episode early (e.g. via 'q')
+            if elapsed < 600:
+                mins = int(elapsed // 60)
+                secs = int(elapsed % 60)
+                print(f"\n⏹ Playback stopped early ({mins}m {secs}s). AniList progress preserved.")
+                break
+
             status = "COMPLETED" if (total_eps and curr_ep_to_play >= total_eps) else "CURRENT"
             update_progress(token, media_id, curr_ep_to_play, status=status)
             total_display = f"/{total_eps}" if total_eps else ""
