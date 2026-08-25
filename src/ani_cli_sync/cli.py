@@ -70,9 +70,9 @@ def gql_query(query: str, variables: dict | None = None, token: str | None = Non
             try:
                 err_json = json.loads(err_body)
                 messages = [err.get("message", "") for err in err_json.get("errors", [])]
-                raise RuntimeError(f"AniList API error: {'; '.join(messages)}")
-            except Exception:
-                raise RuntimeError(f"AniList HTTP {e.code}: {err_body}")
+                raise RuntimeError(f"AniList API error: {'; '.join(messages)}") from e
+            except (json.JSONDecodeError, KeyError):
+                raise RuntimeError(f"AniList HTTP {e.code}: {err_body}") from e
 
 
 def get_viewer(token: str) -> dict:
@@ -275,9 +275,19 @@ def cmd_set(title: str, episode: int) -> None:
     media_id = media["id"]
     display_title = media["title"]["english"] or media["title"]["romaji"]
     total_episodes = media.get("episodes")
+    total_str = str(total_episodes) if total_episodes else "?"
+
+    if total_episodes and episode > total_episodes:
+        print(
+            f"Error: episode {episode} exceeds total episode count ({total_episodes}) for "
+            f"'{display_title}'. Did you pass an absolute scraper number instead of the "
+            f"AniList episode number? Use 'ani-cli-sync set \"{display_title}\" <1..{total_episodes}>'.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     status = "COMPLETED" if (total_episodes and episode >= total_episodes) else "CURRENT"
     update_progress(token, media_id, episode, status=status)
-    total_str = str(total_episodes) if total_episodes else "?"
     print(f"✓ Updated AniList: {display_title} -> Episode {episode}/{total_str} [{status}]")
 
 
@@ -355,6 +365,55 @@ def cmd_import_netflix(csv_path: str) -> None:
         time.sleep(1.0)
 
     print("\n✓ Netflix viewing history successfully imported to AniList!")
+
+
+# Episode offset table: (display_fragment, search_override | None, max_anilist_ep, scraper_offset)
+#
+# When the scraper backend (e.g. gogoanime/AniDB) uses absolute continuous numbering across seasons
+# but AniList tracks each season independently (ep 1..N), we must add an offset to translate the
+# AniList episode number into the scraper's episode number.
+#
+# Table format: (fragment_in_display_part, search_override, max_anilist_ep, offset)
+#   - fragment_in_display_part: substring matched case-sensitively against the fzf display line
+#   - search_override: ani-cli search string to use (None = keep the AniList romaji title)
+#   - max_anilist_ep: only apply offset when anilist ep <= this value (safety guard)
+#   - offset: added to the AniList ep number to get the scraper ep number
+#
+# To add a new season: append one tuple. No control-flow changes needed.
+_EPISODE_OFFSETS: list[tuple[str, str | None, int, int]] = [
+    # Frieren S2: AniList 1-10 → gogoanime 29-38
+    ("Frieren", None, 10, 28),
+    # Slime S2 Part 2: AniList 1-12 → gogoanime 37-48
+    ("Part 2", "That Time I Got Reincarnated as a Slime Season 2 Part 2", 12, 36),
+    # Slime S2: AniList 1-12 → gogoanime 25-36
+    ("Slime", "That Time I Got Reincarnated as a Slime Season 2", 12, 24),
+    ("Tensei", "That Time I Got Reincarnated as a Slime Season 2", 12, 24),
+]
+
+
+def resolve_episode_offset(display_part: str, title_search: str, anilist_ep: int) -> tuple[str, int]:
+    """Translate an AniList episode number to a scraper episode number using the offset table.
+
+    Some scrapers (e.g. gogoanime backed by AniDB) use absolute continuous numbering across all
+    seasons while AniList resets to episode 1 for each season entry. This function applies the
+    correct offset so ani-cli fetches the right video.
+
+    Args:
+        display_part: The fzf display string for the selected entry (used for fragment matching).
+        title_search: The ani-cli search title (romaji preferred, falls back to english).
+        anilist_ep:   The AniList episode number to play (1-based within the season).
+
+    Returns:
+        A (search_arg, scraper_ep) tuple ready to pass to ani-cli.
+    """
+    if "Season 2" not in display_part:
+        return title_search, anilist_ep
+
+    for fragment, search_override, max_ep, offset in _EPISODE_OFFSETS:
+        if fragment in display_part and anilist_ep <= max_ep:
+            return (search_override or title_search), anilist_ep + offset
+
+    return title_search, anilist_ep
 
 
 def cmd_watch(
@@ -460,18 +519,7 @@ def cmd_watch(
 
     curr_ep_to_play = next_ep
     while True:
-        # Check if season offset is needed (e.g. Frieren Season 2 numbered 29-38, Slime Season 2 numbered 25-48 on AniDB)
-        search_arg = title_search
-        ep_arg = curr_ep_to_play
-        if "Season 2" in display_part and "Frieren" in display_part and ep_arg <= 10:
-            ep_arg = ep_arg + 28  # Map 1 -> 29
-        elif "Season 2" in display_part and ("Slime" in display_part or "Tensei" in display_part) and ep_arg <= 12:
-            search_arg = "That Time I Got Reincarnated as a Slime Season 2"
-            if "Part 2" in display_part:
-                search_arg = "That Time I Got Reincarnated as a Slime Season 2 Part 2"
-                ep_arg = ep_arg + 36  # Map 1 -> 37
-            else:
-                ep_arg = ep_arg + 24  # Map 1 -> 25
+        search_arg, ep_arg = resolve_episode_offset(display_part, title_search, curr_ep_to_play)
 
         print(f"\n▶ Launching ani-cli for '{search_arg}' Episode {ep_arg}...")
         cmd = ["ani-cli", "--exit-after-play", "-S", "1"]
