@@ -522,7 +522,10 @@ def cmd_watch(
         search_arg, ep_arg = resolve_episode_offset(display_part, title_search, curr_ep_to_play)
 
         print(f"\n▶ Launching ani-cli for '{search_arg}' Episode {ep_arg}...")
-        cmd = ["ani-cli", "--exit-after-play", "-S", "1"]
+        # --no-detach keeps mpv in the foreground so subprocess.run() only returns when
+        # the user closes mpv. --exit-after-play exits immediately after spawning mpv,
+        # making the elapsed-time early-quit guard always trigger incorrectly.
+        cmd = ["ani-cli", "--no-detach", "-S", "1"]
         if skip_intro:
             cmd.append("--skip")
         if dub:
@@ -536,7 +539,9 @@ def cmd_watch(
         elapsed = time.time() - t_start
 
         if ret.returncode == 0:
-            # If user watched less than 10 minutes (600s), they quit the episode early (e.g. via 'q')
+            # elapsed now correctly measures actual mpv watch time because --no-detach
+            # keeps the process running until the user closes the player.
+            # < 600s means the user quit early (e.g. via 'q') before the episode was done.
             if elapsed < 600:
                 mins = int(elapsed // 60)
                 secs = int(elapsed % 60)
