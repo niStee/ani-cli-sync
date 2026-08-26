@@ -155,6 +155,55 @@ options:
 
 ---
 
+## 🔢 Multi-Season Episode Offsets
+
+Some scraper backends (e.g. gogoanime via AniDB) use **absolute continuous episode numbering** across
+seasons, while AniList resets to episode 1 for each season entry. `ani-cli-sync` translates AniList
+episode numbers to the correct scraper episode automatically.
+
+| Show / Season | AniList episodes | Scraper episodes | Offset |
+|---|---|---|---|
+| Frieren: Beyond Journey's End Season 2 | 1–10 | 29–38 | +28 |
+| That Time I Got Reincarnated as a Slime Season 2 | 1–12 | 25–36 | +24 |
+| That Time I Got Reincarnated as a Slime Season 2 Part 2 | 1–12 | 37–48 | +36 |
+
+> **Adding a new offset**: open `src/ani_cli_sync/cli.py`, append a tuple to `_EPISODE_OFFSETS`.
+> No control-flow changes needed — see the table comment for the format.
+
+---
+
+## 🛠️ Troubleshooting
+
+### Show missing from the fzf picker
+
+The anime is not in `CURRENT` status on AniList. Check with:
+
+```bash
+ani-sync list
+```
+
+Reset it with the **AniList episode number** (not the scraper/AniDB number):
+
+```bash
+# Frieren S2: AniList ep 1 = scraper ep 29
+ani-sync set "Frieren: Beyond Journey's End Season 2" 1
+```
+
+### `set` returns "episode exceeds total"
+
+You passed an absolute scraper episode. Subtract the offset from the table above to get the
+correct AniList episode number. Example: scraper ep 29 − offset 28 = AniList ep 1.
+
+### Show accidentally marked COMPLETED
+
+Use `set` with any episode `< total` — this re-opens it as `CURRENT`:
+
+```bash
+ani-sync set "Frieren: Beyond Journey's End Season 2" 1
+```
+
+---
+
 ## 📄 License
 
 Distributed under the [MIT License](LICENSE).
