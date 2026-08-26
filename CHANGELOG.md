@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.1](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.3.0...ani-cli-sync-v0.3.1) (2026-08-26)
+
+
+### Bug Fixes
+
+* **hardening:** guard cmd_set clobber, data-driven offset table, fix gql_query exception chain ([#16](https://github.com/niStee/ani-cli-sync/issues/16)) ([6b1e72c](https://github.com/niStee/ani-cli-sync/commit/6b1e72c))
+
+
+### Documentation
+
+* add multi-season episode offset table and AniList troubleshooting guide ([#16](https://github.com/niStee/ani-cli-sync/issues/16)) ([6b1e72c](https://github.com/niStee/ani-cli-sync/commit/6b1e72c))
+
 ## [0.3.0](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.2.0...ani-cli-sync-v0.3.0) (2026-08-20)
 
 
