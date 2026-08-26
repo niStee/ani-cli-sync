@@ -522,10 +522,7 @@ def cmd_watch(
         search_arg, ep_arg = resolve_episode_offset(display_part, title_search, curr_ep_to_play)
 
         print(f"\n▶ Launching ani-cli for '{search_arg}' Episode {ep_arg}...")
-        # --no-detach keeps mpv in the foreground so subprocess.run() only returns when
-        # the user closes mpv. --exit-after-play exits immediately after spawning mpv,
-        # making the elapsed-time early-quit guard always trigger incorrectly.
-        cmd = ["ani-cli", "--no-detach", "-S", "1"]
+        cmd = ["ani-cli", "--exit-after-play", "-S", "1"]
         if skip_intro:
             cmd.append("--skip")
         if dub:
