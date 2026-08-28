@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.3.1...ani-cli-sync-v0.3.2) (2026-08-28)
+
+
+### Bug Fixes
+
+* **sync:** add Slime Season 3 continuous episode offsets ([#23](https://github.com/niStee/ani-cli-sync/issues/23)) ([b99f0f2](https://github.com/niStee/ani-cli-sync/commit/b99f0f2759e4655156e2f53555723a4ac793f7c4))
+
 ## [0.3.1](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.3.0...ani-cli-sync-v0.3.1) (2026-08-26)
 
 

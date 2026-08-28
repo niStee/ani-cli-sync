@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ani-cli-sync"
-version = "0.3.1"
+version = "0.3.2"
 description = "Automated AniList synchronization wrapper for ani-cli"
 readme = "README.md"
 license = "MIT"
