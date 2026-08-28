@@ -166,6 +166,7 @@ episode numbers to the correct scraper episode automatically.
 | Frieren: Beyond Journey's End Season 2 | 1–10 | 29–38 | +28 |
 | That Time I Got Reincarnated as a Slime Season 2 | 1–12 | 25–36 | +24 |
 | That Time I Got Reincarnated as a Slime Season 2 Part 2 | 1–12 | 37–48 | +36 |
+| That Time I Got Reincarnated as a Slime Season 3 | 1–24 | 49–72 | +48 |
 
 > **Adding a new offset**: open `src/ani_cli_sync/cli.py`, append a tuple to `_EPISODE_OFFSETS`.
 > No control-flow changes needed — see the table comment for the format.

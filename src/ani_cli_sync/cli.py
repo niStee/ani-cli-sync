@@ -381,13 +381,18 @@ def cmd_import_netflix(csv_path: str) -> None:
 #
 # To add a new season: append one tuple. No control-flow changes needed.
 _EPISODE_OFFSETS: list[tuple[str, str | None, int, int]] = [
+    # Slime S3: AniList 1-24 → gogoanime 49-72
+    ("Slime Season 3", "That Time I Got Reincarnated as a Slime Season 3", 24, 48),
+    ("Slime Datta Ken 3rd Season", "That Time I Got Reincarnated as a Slime Season 3", 24, 48),
     # Frieren S2: AniList 1-10 → gogoanime 29-38
-    ("Frieren", None, 10, 28),
+    ("Frieren: Beyond Journey's End Season 2", None, 10, 28),
+    ("Sousou no Frieren 2nd Season", None, 10, 28),
     # Slime S2 Part 2: AniList 1-12 → gogoanime 37-48
     ("Part 2", "That Time I Got Reincarnated as a Slime Season 2 Part 2", 12, 36),
     # Slime S2: AniList 1-12 → gogoanime 25-36
-    ("Slime", "That Time I Got Reincarnated as a Slime Season 2", 12, 24),
-    ("Tensei", "That Time I Got Reincarnated as a Slime Season 2", 12, 24),
+    ("Slime Season 2", "That Time I Got Reincarnated as a Slime Season 2", 12, 24),
+    ("Slime 2nd Season", "That Time I Got Reincarnated as a Slime Season 2", 12, 24),
+    ("Tensei Shitara Slime Datta Ken 2nd Season", "That Time I Got Reincarnated as a Slime Season 2", 12, 24),
 ]
 
 
@@ -406,9 +411,6 @@ def resolve_episode_offset(display_part: str, title_search: str, anilist_ep: int
     Returns:
         A (search_arg, scraper_ep) tuple ready to pass to ani-cli.
     """
-    if "Season 2" not in display_part:
-        return title_search, anilist_ep
-
     for fragment, search_override, max_ep, offset in _EPISODE_OFFSETS:
         if fragment in display_part and anilist_ep <= max_ep:
             return (search_override or title_search), anilist_ep + offset

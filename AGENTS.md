@@ -31,6 +31,7 @@ number to the correct scraper episode.
 | Frieren: Beyond Journey's End Season 2 | 1–10 | 29–38 | +28 |
 | Slime Season 2 | 1–12 | 25–36 | +24 |
 | Slime Season 2 Part 2 | 1–12 | 37–48 | +36 |
+| Slime Season 3 | 1–24 | 49–72 | +48 |
 
 **To add a new offset**: append one tuple to `_EPISODE_OFFSETS` in `cli.py`. No control-flow changes needed.
 Format: `(display_fragment, search_override_or_None, max_anilist_ep, offset)`.
