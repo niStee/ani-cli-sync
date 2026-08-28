@@ -210,6 +210,16 @@ class TestResolveEpisodeOffset(unittest.TestCase):
         self.assertEqual(ep, 5)
         self.assertEqual(search, "Sousou no Frieren")
 
+    def test_non_slime_season3_resolves_to_identity(self):
+        """Non-Slime Season 3 anime must NOT match Slime S3 offsets."""
+        search, ep = resolve_episode_offset(
+            "[01/13] The Rising of the Shield Hero Season 3 | Tate no Yuusha no Nariagari Season 3",
+            "Tate no Yuusha no Nariagari Season 3",
+            1,
+        )
+        self.assertEqual(ep, 1)
+        self.assertEqual(search, "Tate no Yuusha no Nariagari Season 3")
+
     def test_no_offset_beyond_max_ep(self):
         """Episode > max_anilist_ep: offset must NOT be applied (avoid double-offset)."""
         _, ep = resolve_episode_offset(
