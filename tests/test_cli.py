@@ -145,7 +145,60 @@ class TestResolveEpisodeOffset(unittest.TestCase):
             1,
         )
         self.assertEqual(ep, 37)
-        self.assertEqual(search, "That Time I Got Reincarnated as a Slime Season 2 Part 2")
+    # ── Slime S3 ──────────────────────────────────────────────────────────────
+    def test_slime_s3_season3_ep1_maps_to_49(self):
+        search, ep = resolve_episode_offset(
+            "[01/24] That Time I Got Reincarnated as a Slime Season 3 | Tensei Shitara Slime Datta Ken 3rd Season",
+            "Tensei Shitara Slime Datta Ken 3rd Season",
+            1,
+        )
+        self.assertEqual(ep, 49)
+        self.assertEqual(search, "That Time I Got Reincarnated as a Slime Season 3")
+
+    def test_slime_s3_season3_ep24_maps_to_72(self):
+        search, ep = resolve_episode_offset(
+            "[24/24] That Time I Got Reincarnated as a Slime Season 3 | Tensei Shitara Slime Datta Ken 3rd Season",
+            "Tensei Shitara Slime Datta Ken 3rd Season",
+            24,
+        )
+        self.assertEqual(ep, 72)
+        self.assertEqual(search, "That Time I Got Reincarnated as a Slime Season 3")
+
+    def test_slime_s3_season3_ep_beyond_max_falls_through_to_identity(self):
+        search, ep = resolve_episode_offset(
+            "[25/24] That Time I Got Reincarnated as a Slime Season 3 | Tensei Shitara Slime Datta Ken 3rd Season",
+            "Tensei Shitara Slime Datta Ken 3rd Season",
+            25,
+        )
+        self.assertEqual(ep, 25)
+        self.assertEqual(search, "Tensei Shitara Slime Datta Ken 3rd Season")
+
+    def test_slime_s3_3rd_season_ep1_maps_to_49(self):
+        search, ep = resolve_episode_offset(
+            "[01/24] Tensei Shitara Slime Datta Ken 3rd Season",
+            "Tensei Shitara Slime Datta Ken 3rd Season",
+            1,
+        )
+        self.assertEqual(ep, 49)
+        self.assertEqual(search, "That Time I Got Reincarnated as a Slime Season 3")
+
+    def test_slime_s3_3rd_season_ep24_maps_to_72(self):
+        search, ep = resolve_episode_offset(
+            "[24/24] Tensei Shitara Slime Datta Ken 3rd Season",
+            "Tensei Shitara Slime Datta Ken 3rd Season",
+            24,
+        )
+        self.assertEqual(ep, 72)
+        self.assertEqual(search, "That Time I Got Reincarnated as a Slime Season 3")
+
+    def test_slime_s3_3rd_season_ep_beyond_max_falls_through_to_identity(self):
+        search, ep = resolve_episode_offset(
+            "[25/24] Tensei Shitara Slime Datta Ken 3rd Season",
+            "Tensei Shitara Slime Datta Ken 3rd Season",
+            25,
+        )
+        self.assertEqual(ep, 25)
+        self.assertEqual(search, "Tensei Shitara Slime Datta Ken 3rd Season")
 
     # ── Identity (no offset) ──────────────────────────────────────────────────
     def test_no_offset_for_season1(self):
