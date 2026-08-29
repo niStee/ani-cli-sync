@@ -145,6 +145,7 @@ class TestResolveEpisodeOffset(unittest.TestCase):
             1,
         )
         self.assertEqual(ep, 37)
+        self.assertEqual(search, "That Time I Got Reincarnated as a Slime Season 2 Part 2")
     # ── Slime S3 ──────────────────────────────────────────────────────────────
     def test_slime_s3_season3_ep1_maps_to_49(self):
         search, ep = resolve_episode_offset(
