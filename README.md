@@ -155,11 +155,29 @@ options:
 
 ---
 
+## 🔄 Sequel Rollover
+
+When you finish the final episode of a season, `ani-cli-sync` automatically queries AniList for the next released TV or ONA sequel:
+
+- **Interactive Mode**: Prompts before enrolling:
+  ```text
+  Finished 'That Time I Got Reincarnated as a Slime Season 2 Part 2'. Sequel 'That Time I Got Reincarnated as a Slime Season 3' found (24 episodes). Add to Watching and continue with Episode 1? [y/N]:
+  ```
+- **Autoplay Mode (`-a` / `--autoplay`)**: Automatically enrolls the sequel in `CURRENT` and continues playing seamlessly.
+- **Clobber Guard**: If you already have progress on the sequel (e.g. paused at episode 5), `ani-cli-sync` preserves your progress and resumes at episode 6 rather than resetting to episode 1.
+- **Safety Rails**: If sequels are unreleased (`NOT_YET_RELEASED`) or ambiguous (multiple TV/ONA sequels), it stops cleanly without making unwanted mutations.
+
+---
+
 ## 🔢 Multi-Season Episode Offsets
 
 Some scraper backends (e.g. gogoanime via AniDB) use **absolute continuous episode numbering** across
 seasons, while AniList resets to episode 1 for each season entry. `ani-cli-sync` translates AniList
-episode numbers to the correct scraper episode automatically.
+episode numbers to the scraper episode numbers using a strict 3-tier precedence:
+
+1. **Explicit Override Table (`_EPISODE_OFFSETS`)**: Hand-curated overrides always take priority and can specify custom search titles.
+2. **Computed PREQUEL-Chain Offsets**: Dynamically queries AniList's relation graph, traversing preceding `TV`/`ONA` seasons and summing episode counts (with cycle detection, depth limits, and ambiguity guards).
+3. **Identity Fallback**: Default 1-to-1 numbering when no override exists and the show has no preceding seasons.
 
 | Show / Season | AniList episodes | Scraper episodes | Offset |
 |---|---|---|---|
@@ -168,8 +186,8 @@ episode numbers to the correct scraper episode automatically.
 | That Time I Got Reincarnated as a Slime Season 2 Part 2 | 1–12 | 37–48 | +36 |
 | That Time I Got Reincarnated as a Slime Season 3 | 1–24 | 49–72 | +48 |
 
-> **Adding a new offset**: open `src/ani_cli_sync/cli.py`, append a tuple to `_EPISODE_OFFSETS`.
-> No control-flow changes needed — see the table comment for the format.
+> **Adding a static override**: open `src/ani_cli_sync/cli.py` and append a tuple to `_EPISODE_OFFSETS`.
+> Standard multi-season anime are automatically handled via PREQUEL chain computation without requiring table additions.
 
 ---
 

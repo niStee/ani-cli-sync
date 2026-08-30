@@ -16,15 +16,21 @@ Automated AniList synchronization wrapper for [`ani-cli`](https://github.com/pys
 ## Key Architectural Principles
 
 1. **Watchlist-First Context Resolution**: Matches anime titles against active `CURRENT` watchlist before falling back to global AniList search to prevent accidental clobbering of completed seasons.
-2. **Multi-Season Scraping Offset Handling**: Transparently bridges AniList discrete season numbering with scraper backend absolute episode counts (e.g. AniDB continuous offsets). See `_EPISODE_OFFSETS` table in `cli.py`.
-3. **Completion & Boundary Enforcement**: Auto-transitions status to `COMPLETED` when `ep >= total` and prevents autoplay loops past season finales.
+2. **Multi-Season Scraping Offset Handling**: Bridges AniList discrete season numbering with scraper backend continuous numbering via strict 3-tier precedence:
+   - **Tier 1 (Explicit Table)**: `_EPISODE_OFFSETS` static overrides (can specify custom search queries).
+   - **Tier 2 (Computed Chain)**: `compute_prequel_offset()` traverses AniList's relation graph for preceding `TV`/`ONA` nodes, summing total episodes (with cycle protection, depth limit 10, and ambiguity checks).
+   - **Tier 3 (Identity)**: Fallback 1-to-1 numbering.
+3. **Completion, Boundary Enforcement & Sequel Rollover**: Auto-transitions status to `COMPLETED` when `ep >= total`. Queries AniList for released TV/ONA sequels with a clobber guard (resumes at `progress + 1` if already in list, prompts in interactive mode or seamlessly continues in `--autoplay`).
 4. **Zero Third-Party Runtime Dependencies**: Implemented strictly with standard library (`urllib.request`, `json`, `argparse`, `subprocess`, `pathlib`).
 
-## Episode Offset Table (`_EPISODE_OFFSETS`)
+## Episode Offset Resolution & Precedence
 
 Some scrapers (gogoanime / AniDB) use absolute continuous episode numbering across seasons, while AniList
-tracks each season starting from episode 1. `resolve_episode_offset()` translates the AniList episode
-number to the correct scraper episode.
+tracks each season starting from episode 1. `resolve_episode_offset()` resolves the correct scraper episode:
+
+1. `_EPISODE_OFFSETS` static table match (highest priority, supports search overrides)
+2. `compute_prequel_offset()` PREQUEL-chain traversal (lazy-queried and cached per `media_id`)
+3. Identity (`anilist_ep`)
 
 | Show / Season | AniList ep range | Scraper ep range | Offset |
 |---|---|---|---|
@@ -33,8 +39,7 @@ number to the correct scraper episode.
 | Slime Season 2 Part 2 | 1–12 | 37–48 | +36 |
 | Slime Season 3 | 1–24 | 49–72 | +48 |
 
-**To add a new offset**: append one tuple to `_EPISODE_OFFSETS` in `cli.py`. No control-flow changes needed.
-Format: `(display_fragment, search_override_or_None, max_anilist_ep, offset)`.
+**Static Overrides**: To force a specific search string or override automatic chain resolution, append a tuple to `_EPISODE_OFFSETS` in `cli.py`. Standard multi-season shows are computed automatically.
 
 ## Commands & Testing
 

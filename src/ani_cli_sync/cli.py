@@ -22,6 +22,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
 ANILIST_API = "https://graphql.anilist.co"
@@ -136,6 +137,81 @@ def update_progress(token: str, media_id: int, progress: int, status: str = "CUR
     """
     res = gql_query(mutation, variables={"mediaId": media_id, "progress": progress, "status": status}, token=token)
     return res.get("data", {}).get("SaveMediaListEntry", {})
+
+
+def get_media_list_entry(token: str, user_id: int, media_id: int) -> dict | None:
+    """Fetch user's media list entry for a specific anime, if it exists."""
+    query = """
+    query ($uid: Int, $mid: Int) {
+        MediaList (userId: $uid, mediaId: $mid) {
+            status
+            progress
+        }
+    }
+    """
+    try:
+        res = gql_query(query, variables={"uid": user_id, "mid": media_id}, token=token)
+        return res.get("data", {}).get("MediaList")
+    except Exception:
+        return None
+
+
+def find_sequel(media_id: int, token: str | None = None) -> tuple[dict | None, str | None]:
+    """Find the unambiguous TV/ONA sequel for a media entry, if released.
+
+    Returns:
+        A tuple of (sequel_node, reason_if_none).
+    """
+    query = """
+    query ($id: Int) {
+        Media (id: $id, type: ANIME) {
+            relations {
+                edges {
+                    relationType
+                    node {
+                        id
+                        title {
+                            romaji
+                            english
+                        }
+                        episodes
+                        format
+                        status
+                    }
+                }
+            }
+        }
+    }
+    """
+    try:
+        res = gql_query(query, variables={"id": media_id}, token=token)
+    except Exception:
+        return None, None
+
+    media = res.get("data", {}).get("Media") if isinstance(res, dict) else None
+    if not media:
+        return None, None
+
+    edges = media.get("relations", {}).get("edges", []) or []
+    sequels = [
+        edge.get("node")
+        for edge in edges
+        if edge.get("relationType") == "SEQUEL"
+        and (edge.get("node") or {}).get("format") in ("TV", "ONA")
+    ]
+
+    if not sequels:
+        return None, None
+
+    if len(sequels) > 1:
+        return None, "Multiple sequels found (ambiguous)."
+
+    node = sequels[0]
+    title = (node.get("title") or {}).get("english") or (node.get("title") or {}).get("romaji") or "Unknown"
+    if node.get("status") == "NOT_YET_RELEASED":
+        return None, f"Sequel '{title}' announced, not yet released."
+
+    return node, None
 
 
 def search_anime(title: str) -> dict | None:
@@ -396,17 +472,115 @@ _EPISODE_OFFSETS: list[tuple[str, str | None, int, int]] = [
 ]
 
 
-def resolve_episode_offset(display_part: str, title_search: str, anilist_ep: int) -> tuple[str, int]:
+_PREQUEL_OFFSET_CACHE: dict[int, int | None] = {}
+
+
+def compute_prequel_offset(
+    media_id: int,
+    gql_fn: Callable[[str, dict | None], dict],
+    max_depth: int = 10,
+) -> int | None:
+    """Walk PREQUEL edges of TV/ONA entries summing episodes to compute continuous offset.
+
+    Guardrails:
+      - Visited set for cycle detection (returns None on cycle)
+      - Max depth limit (10) (returns None if exceeded)
+      - episodes is None on any prequel node -> returns None
+      - Multiple TV/ONA PREQUEL edges at any step -> returns None (ambiguous)
+      - Returns None on any GraphQL/network exception (never raises)
+
+    Returns:
+      Total prequel episodes (int) if an unambiguous prequel chain exists, or None.
+    """
+    query = """
+    query ($id: Int) {
+        Media (id: $id, type: ANIME) {
+            relations {
+                edges {
+                    relationType
+                    node {
+                        id
+                        episodes
+                        format
+                    }
+                }
+            }
+        }
+    }
+    """
+    visited: set[int] = {media_id}
+    current_id = media_id
+    total_offset = 0
+    depth = 0
+
+    while depth < max_depth:
+        try:
+            res = gql_fn(query, {"id": current_id})
+        except Exception:
+            return None
+
+        media = res.get("data", {}).get("Media") if isinstance(res, dict) else None
+        if not media:
+            return None
+
+        edges = media.get("relations", {}).get("edges", []) or []
+        prequels = [
+            edge.get("node")
+            for edge in edges
+            if edge.get("relationType") == "PREQUEL"
+            and (edge.get("node") or {}).get("format") in ("TV", "ONA")
+        ]
+
+        if not prequels:
+            return total_offset
+
+        if len(prequels) > 1:
+            return None
+
+        node = prequels[0]
+        node_id = node.get("id")
+        episodes = node.get("episodes")
+
+        if node_id is None or episodes is None:
+            return None
+
+        if node_id in visited:
+            return None
+
+        visited.add(node_id)
+        total_offset += episodes
+        current_id = node_id
+        depth += 1
+
+    return None
+
+
+def has_table_offset_match(display_part: str, anilist_ep: int) -> bool:
+    """Check whether the static _EPISODE_OFFSETS table matches the entry."""
+    for fragment, _, max_ep, _ in _EPISODE_OFFSETS:
+        if fragment in display_part and anilist_ep <= max_ep:
+            return True
+    return False
+
+
+def resolve_episode_offset(
+    display_part: str,
+    title_search: str,
+    anilist_ep: int,
+    computed_offset: int | None = None,
+) -> tuple[str, int]:
     """Translate an AniList episode number to a scraper episode number using the offset table.
 
-    Some scrapers (e.g. gogoanime backed by AniDB) use absolute continuous numbering across all
-    seasons while AniList resets to episode 1 for each season entry. This function applies the
-    correct offset so ani-cli fetches the right video.
+    Precedence order:
+      1. Static _EPISODE_OFFSETS table match (always wins, can provide search_override)
+      2. Computed PREQUEL-chain offset (if table misses and computed_offset is provided)
+      3. Identity (title_search, anilist_ep)
 
     Args:
-        display_part: The fzf display string for the selected entry (used for fragment matching).
-        title_search: The ani-cli search title (romaji preferred, falls back to english).
-        anilist_ep:   The AniList episode number to play (1-based within the season).
+        display_part:    The fzf display string for the selected entry (used for fragment matching).
+        title_search:    The ani-cli search title (romaji preferred, falls back to english).
+        anilist_ep:      The AniList episode number to play (1-based within the season).
+        computed_offset: Optional computed PREQUEL-chain offset when table misses.
 
     Returns:
         A (search_arg, scraper_ep) tuple ready to pass to ani-cli.
@@ -414,6 +588,9 @@ def resolve_episode_offset(display_part: str, title_search: str, anilist_ep: int
     for fragment, search_override, max_ep, offset in _EPISODE_OFFSETS:
         if fragment in display_part and anilist_ep <= max_ep:
             return (search_override or title_search), anilist_ep + offset
+
+    if computed_offset is not None and computed_offset > 0:
+        return title_search, anilist_ep + computed_offset
 
     return title_search, anilist_ep
 
@@ -521,7 +698,21 @@ def cmd_watch(
 
     curr_ep_to_play = next_ep
     while True:
-        search_arg, ep_arg = resolve_episode_offset(display_part, title_search, curr_ep_to_play)
+        computed_offset = None
+        if not has_table_offset_match(display_part, curr_ep_to_play):
+            if media_id not in _PREQUEL_OFFSET_CACHE:
+                _PREQUEL_OFFSET_CACHE[media_id] = compute_prequel_offset(
+                    media_id,
+                    lambda q, v: gql_query(q, v, token=token),
+                )
+            computed_offset = _PREQUEL_OFFSET_CACHE.get(media_id)
+
+        search_arg, ep_arg = resolve_episode_offset(
+            display_part,
+            title_search,
+            curr_ep_to_play,
+            computed_offset=computed_offset,
+        )
 
         print(f"\n▶ Launching ani-cli for '{search_arg}' Episode {ep_arg}...")
         cmd = ["ani-cli", "--exit-after-play", "-S", "1"]
@@ -555,7 +746,61 @@ def cmd_watch(
 
             if status == "COMPLETED":
                 print(f"\n🎉 Completed watching '{title_search}'!")
-                break
+                sequel_node, reason = find_sequel(media_id, token=token)
+                if not sequel_node:
+                    if reason:
+                        print(f"\n{reason}")
+                    break
+
+                sequel_id = sequel_node["id"]
+                sequel_rom = (sequel_node.get("title") or {}).get("romaji") or ""
+                sequel_eng = (sequel_node.get("title") or {}).get("english") or sequel_rom
+                sequel_title = sequel_eng or sequel_rom
+                sequel_total = sequel_node.get("episodes")
+                sequel_total_display = str(sequel_total) if sequel_total else "?"
+
+                # Clobber guard: check existing list entry
+                existing_entry = get_media_list_entry(token, viewer["id"], sequel_id)
+                existing_progress = (existing_entry.get("progress") or 0) if existing_entry else 0
+                if existing_progress > 0:
+                    start_ep = existing_progress + 1
+                else:
+                    start_ep = 1
+
+                accepted = False
+                if autoplay:
+                    accepted = True
+                else:
+                    prompt_msg = (
+                        f"\nFinished '{title_search}'. Sequel '{sequel_title}' found "
+                        f"({sequel_total_display} episodes). Add to Watching and continue with Episode {start_ep}? [y/N]: "
+                    )
+                    choice = input(prompt_msg).strip().lower()
+                    if choice in ("y", "yes"):
+                        accepted = True
+
+                if not accepted:
+                    break
+
+                # Enroll or update status
+                if existing_entry and existing_progress > 0:
+                    if existing_entry.get("status") != "CURRENT":
+                        update_progress(token, sequel_id, existing_progress, status="CURRENT")
+                else:
+                    update_progress(token, sequel_id, 0, status="CURRENT")
+
+                if autoplay:
+                    print(f"\n▶ Autoplaying sequel '{sequel_title}' Episode {start_ep} in 3 seconds...")
+                    time.sleep(3)
+
+                # Switch loop context to the sequel
+                media_id = sequel_id
+                total_eps = sequel_total
+                total_eps_str = sequel_total_display
+                title_search = sequel_rom or sequel_eng
+                display_part = f"[00/{total_eps_str}] {sequel_eng} | {sequel_rom}"
+                curr_ep_to_play = start_ep
+                continue
 
             if autoplay:
                 print(f"▶ Autoplaying Episode {curr_ep_to_play + 1} in 3 seconds...")
