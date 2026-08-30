@@ -788,6 +788,47 @@ class TestSequelRollover(unittest.TestCase):
         mock_update.assert_called_once_with("tok", 100, 12, status="COMPLETED")
         self.assertEqual(mock_subproc.call_count, 1)
 
+    def test_sequel_already_completed_no_mutation(self):
+        """Sequel already marked COMPLETED -> no rollover, no mutation, loop breaks."""
+        relations_resp = {
+            "data": {
+                "Media": {
+                    "relations": {
+                        "edges": [
+                            {
+                                "relationType": "SEQUEL",
+                                "node": {
+                                    "id": 200,
+                                    "title": {"english": "Show Season 2", "romaji": "Show S2"},
+                                    "episodes": 12,
+                                    "format": "TV",
+                                    "status": "FINISHED",
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        medialist_resp = {
+            "data": {
+                "MediaList": {
+                    "status": "COMPLETED",
+                    "progress": 12,
+                }
+            }
+        }
+        mock_update, mock_subproc = self._run_cmd_watch(
+            watching_entries=[self.s1_entry],
+            relations_resp=relations_resp,
+            medialist_resp=medialist_resp,
+            input_responses=[],
+            autoplay=False,
+        )
+
+        mock_update.assert_called_once_with("tok", 100, 12, status="COMPLETED")
+        self.assertEqual(mock_subproc.call_count, 1)
+
 
 class TestSequelHelpers(unittest.TestCase):
     """Unit tests for find_sequel, get_media_list_entry, and has_table_offset_match."""

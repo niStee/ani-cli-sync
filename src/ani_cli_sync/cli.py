@@ -762,6 +762,10 @@ def cmd_watch(
                 # Clobber guard: check existing list entry
                 existing_entry = get_media_list_entry(token, viewer["id"], sequel_id)
                 existing_progress = (existing_entry.get("progress") or 0) if existing_entry else 0
+                if existing_entry and existing_entry.get("status") == "COMPLETED":
+                    print(f"\nSequel '{sequel_title}' already completed — nothing to roll over.")
+                    break
+
                 if existing_progress > 0:
                     start_ep = existing_progress + 1
                 else:
