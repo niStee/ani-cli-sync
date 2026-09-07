@@ -21,7 +21,7 @@ jobs:
           persist-credentials: false
       - name: push mirror
         env:
-          CODEBERG_SSH_KEY: ${ secrets.CODEBERG_SSH_KEY }
+          CODEBERG_SSH_KEY: ${{ secrets.CODEBERG_SSH_KEY }}
         run: |
           install -m 700 -d ~/.ssh
           printf '%s\n' "$CODEBERG_SSH_KEY" > ~/.ssh/id_ed25519
