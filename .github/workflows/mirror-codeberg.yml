@@ -1,0 +1,31 @@
+name: mirror to codeberg
+on:
+  push:
+    branches: [main]
+    tags: ['*']
+  workflow_dispatch:        # manual repair path after a failed run
+
+concurrency:
+  group: mirror-codeberg
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: push mirror
+        env:
+          CODEBERG_SSH_KEY: ${{ secrets.CODEBERG_SSH_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$CODEBERG_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan codeberg.org >> ~/.ssh/known_hosts
+          git remote add codeberg git@codeberg.org:niStee/ani-cli-sync.git
+          git push codeberg 'refs/heads/main:refs/heads/main' 'refs/tags/*:refs/tags/*'

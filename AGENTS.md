@@ -82,3 +82,10 @@ Divide the scraper ep by the offset to find the correct AniList ep (see offset t
 
 **If the show was accidentally marked COMPLETED**, use `set` at the correct episode — it will
 re-open it as `CURRENT` as long as `ep < total`.
+
+## Repository topology
+- canonical: GitHub (niStee/ani-cli-sync) — all changes land via PR to main
+- mirror: Codeberg (codeberg.org/niStee/ani-cli-sync) — automated push mirror via
+  .github/workflows/mirror-codeberg.yml; receives main + tags only
+- never push directly to main; never push to Codeberg directly
+- mirror repair path: re-run the workflow (workflow_dispatch), not local pushes
