@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.4.0...ani-cli-sync-v0.4.1) (2026-09-09)
+
+
+### Documentation
+
+* align AGENTS.md topology with fleet canonical standard ([#30](https://github.com/niStee/ani-cli-sync/issues/30)) ([22d500b](https://github.com/niStee/ani-cli-sync/commit/22d500b843395d7ae4f1016db50aa910037434e9))
+
 ## [0.4.0](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.3.2...ani-cli-sync-v0.4.0) (2026-08-30)
 
 
