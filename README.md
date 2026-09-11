@@ -182,9 +182,9 @@ episode numbers to the scraper episode numbers using a strict 3-tier precedence:
 | Show / Season | AniList episodes | Scraper episodes | Offset |
 |---|---|---|---|
 | Frieren: Beyond Journey's End Season 2 | 1–10 | 29–38 | +28 |
-| That Time I Got Reincarnated as a Slime Season 2 | 1–12 | 25–36 | +24 |
-| That Time I Got Reincarnated as a Slime Season 2 Part 2 | 1–12 | 37–48 | +36 |
-| That Time I Got Reincarnated as a Slime Season 3 | 1–24 | 49–72 | +48 |
+| That Time I Got Reincarnated as a Slime Season 2 | 1–12 | 1–12 | +0 |
+| That Time I Got Reincarnated as a Slime Season 2 Part 2 | 1–12 | 1–12 | +0 |
+| That Time I Got Reincarnated as a Slime Season 3 | 1–24 | 1–24 | +0 |
 
 > **Adding a static override**: open `src/ani_cli_sync/cli.py` and append a tuple to `_EPISODE_OFFSETS`.
 > Standard multi-season anime are automatically handled via PREQUEL chain computation without requiring table additions.

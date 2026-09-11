@@ -457,18 +457,18 @@ def cmd_import_netflix(csv_path: str) -> None:
 #
 # To add a new season: append one tuple. No control-flow changes needed.
 _EPISODE_OFFSETS: list[tuple[str, str | None, int, int]] = [
-    # Slime S3: AniList 1-24 → gogoanime 49-72
-    ("Slime Season 3", "That Time I Got Reincarnated as a Slime Season 3", 24, 48),
-    ("Slime Datta Ken 3rd Season", "That Time I Got Reincarnated as a Slime Season 3", 24, 48),
+    # Slime S3: AniList 1-24 → hianime 1-24 (provider uses per-season numbering, offset 0 guards against prequel chain)
+    ("Slime Season 3", "That Time I Got Reincarnated as a Slime Season 3", 24, 0),
+    ("Slime Datta Ken 3rd Season", "That Time I Got Reincarnated as a Slime Season 3", 24, 0),
     # Frieren S2: AniList 1-10 → gogoanime 29-38
     ("Frieren: Beyond Journey's End Season 2", None, 10, 28),
     ("Sousou no Frieren 2nd Season", None, 10, 28),
-    # Slime S2 Part 2: AniList 1-12 → gogoanime 37-48
-    ("Part 2", "That Time I Got Reincarnated as a Slime Season 2 Part 2", 12, 36),
-    # Slime S2: AniList 1-12 → gogoanime 25-36
-    ("Slime Season 2", "That Time I Got Reincarnated as a Slime Season 2", 12, 24),
-    ("Slime 2nd Season", "That Time I Got Reincarnated as a Slime Season 2", 12, 24),
-    ("Tensei Shitara Slime Datta Ken 2nd Season", "That Time I Got Reincarnated as a Slime Season 2", 12, 24),
+    # Slime S2 Part 2: AniList 1-12 → hianime 1-12
+    ("Part 2", "That Time I Got Reincarnated as a Slime Season 2 Part 2", 12, 0),
+    # Slime S2: AniList 1-12 → hianime 1-12
+    ("Slime Season 2", "That Time I Got Reincarnated as a Slime Season 2", 12, 0),
+    ("Slime 2nd Season", "That Time I Got Reincarnated as a Slime Season 2", 12, 0),
+    ("Tensei Shitara Slime Datta Ken 2nd Season", "That Time I Got Reincarnated as a Slime Season 2", 12, 0),
 ]
 
 
