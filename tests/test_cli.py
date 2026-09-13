@@ -207,7 +207,26 @@ class TestResolveEpisodeOffset(unittest.TestCase):
             25,
         )
         self.assertEqual(ep, 25)
-        self.assertEqual(search, "Tensei Shitara Slime Datta Ken 3rd Season")
+    # ── Slime S4 ──────────────────────────────────────────────────────────────
+    def test_slime_s4_season4_ep1_maps_to_1_with_computed_offset(self):
+        search, ep = resolve_episode_offset(
+            "[00/24] That Time I Got Reincarnated as a Slime Season 4 | Tensei Shitara Slime Datta Ken 4th Season",
+            "Tensei Shitara Slime Datta Ken 4th Season",
+            1,
+            computed_offset=48,
+        )
+        self.assertEqual(ep, 1)
+        self.assertEqual(search, "That Time I Got Reincarnated as a Slime Season 4")
+
+    def test_slime_s4_4th_season_ep1_maps_to_1_with_computed_offset(self):
+        search, ep = resolve_episode_offset(
+            "[00/24] Tensei Shitara Slime Datta Ken 4th Season",
+            "Tensei Shitara Slime Datta Ken 4th Season",
+            1,
+            computed_offset=48,
+        )
+        self.assertEqual(ep, 1)
+        self.assertEqual(search, "That Time I Got Reincarnated as a Slime Season 4")
 
     # ── Identity (no offset) ──────────────────────────────────────────────────
     def test_no_offset_for_season1(self):

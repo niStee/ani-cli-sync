@@ -38,6 +38,7 @@ tracks each season starting from episode 1. `resolve_episode_offset()` resolves 
 | Slime Season 2 | 1–12 | 1–12 | +0 |
 | Slime Season 2 Part 2 | 1–12 | 1–12 | +0 |
 | Slime Season 3 | 1–24 | 1–24 | +0 |
+| Slime Season 4 | 1–24 | 1–24 | +0 |
 
 **Static Overrides**: To force a specific search string or override automatic chain resolution, append a tuple to `_EPISODE_OFFSETS` in `cli.py`. Standard multi-season shows are computed automatically.
 

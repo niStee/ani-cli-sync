@@ -457,6 +457,9 @@ def cmd_import_netflix(csv_path: str) -> None:
 #
 # To add a new season: append one tuple. No control-flow changes needed.
 _EPISODE_OFFSETS: list[tuple[str, str | None, int, int]] = [
+    # Slime S4: AniList 1-24 → hianime 1-24 (provider uses per-season numbering, offset 0 guards against prequel chain)
+    ("Slime Season 4", "That Time I Got Reincarnated as a Slime Season 4", 24, 0),
+    ("Slime Datta Ken 4th Season", "That Time I Got Reincarnated as a Slime Season 4", 24, 0),
     # Slime S3: AniList 1-24 → hianime 1-24 (provider uses per-season numbering, offset 0 guards against prequel chain)
     ("Slime Season 3", "That Time I Got Reincarnated as a Slime Season 3", 24, 0),
     ("Slime Datta Ken 3rd Season", "That Time I Got Reincarnated as a Slime Season 3", 24, 0),
