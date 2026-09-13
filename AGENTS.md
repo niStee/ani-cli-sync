@@ -35,9 +35,9 @@ tracks each season starting from episode 1. `resolve_episode_offset()` resolves 
 | Show / Season | AniList ep range | Scraper ep range | Offset |
 |---|---|---|---|
 | Frieren: Beyond Journey's End Season 2 | 1–10 | 29–38 | +28 |
-| Slime Season 2 | 1–12 | 25–36 | +24 |
-| Slime Season 2 Part 2 | 1–12 | 37–48 | +36 |
-| Slime Season 3 | 1–24 | 49–72 | +48 |
+| Slime Season 2 | 1–12 | 1–12 | +0 |
+| Slime Season 2 Part 2 | 1–12 | 1–12 | +0 |
+| Slime Season 3 | 1–24 | 1–24 | +0 |
 
 **Static Overrides**: To force a specific search string or override automatic chain resolution, append a tuple to `_EPISODE_OFFSETS` in `cli.py`. Standard multi-season shows are computed automatically.
 

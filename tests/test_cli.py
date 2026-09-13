@@ -136,40 +136,41 @@ class TestResolveEpisodeOffset(unittest.TestCase):
         self.assertEqual(search, "Sousou no Frieren 2nd Season")
 
     # ── Slime S2 ──────────────────────────────────────────────────────────────
-    def test_slime_s2_ep1_maps_to_25(self):
+    def test_slime_s2_ep1_maps_to_1(self):
         search, ep = resolve_episode_offset(
             "[01/12] That Time I Got Reincarnated as a Slime Season 2 | Tensei Shitara Slime",
             "Tensei Shitara Slime",
             1,
         )
-        self.assertEqual(ep, 25)
+        self.assertEqual(ep, 1)
         self.assertEqual(search, "That Time I Got Reincarnated as a Slime Season 2")
 
-    def test_slime_s2_part2_ep1_maps_to_37(self):
+    def test_slime_s2_part2_ep1_maps_to_1(self):
         search, ep = resolve_episode_offset(
             "[01/12] Slime Season 2 Part 2 | ...",
             "Tensei Shitara Slime",
             1,
         )
-        self.assertEqual(ep, 37)
+        self.assertEqual(ep, 1)
         self.assertEqual(search, "That Time I Got Reincarnated as a Slime Season 2 Part 2")
+
     # ── Slime S3 ──────────────────────────────────────────────────────────────
-    def test_slime_s3_season3_ep1_maps_to_49(self):
+    def test_slime_s3_season3_ep1_maps_to_1(self):
         search, ep = resolve_episode_offset(
             "[01/24] That Time I Got Reincarnated as a Slime Season 3 | Tensei Shitara Slime Datta Ken 3rd Season",
             "Tensei Shitara Slime Datta Ken 3rd Season",
             1,
         )
-        self.assertEqual(ep, 49)
+        self.assertEqual(ep, 1)
         self.assertEqual(search, "That Time I Got Reincarnated as a Slime Season 3")
 
-    def test_slime_s3_season3_ep24_maps_to_72(self):
+    def test_slime_s3_season3_ep24_maps_to_24(self):
         search, ep = resolve_episode_offset(
             "[24/24] That Time I Got Reincarnated as a Slime Season 3 | Tensei Shitara Slime Datta Ken 3rd Season",
             "Tensei Shitara Slime Datta Ken 3rd Season",
             24,
         )
-        self.assertEqual(ep, 72)
+        self.assertEqual(ep, 24)
         self.assertEqual(search, "That Time I Got Reincarnated as a Slime Season 3")
 
     def test_slime_s3_season3_ep_beyond_max_falls_through_to_identity(self):
@@ -181,22 +182,22 @@ class TestResolveEpisodeOffset(unittest.TestCase):
         self.assertEqual(ep, 25)
         self.assertEqual(search, "Tensei Shitara Slime Datta Ken 3rd Season")
 
-    def test_slime_s3_3rd_season_ep1_maps_to_49(self):
+    def test_slime_s3_3rd_season_ep1_maps_to_1(self):
         search, ep = resolve_episode_offset(
             "[01/24] Tensei Shitara Slime Datta Ken 3rd Season",
             "Tensei Shitara Slime Datta Ken 3rd Season",
             1,
         )
-        self.assertEqual(ep, 49)
+        self.assertEqual(ep, 1)
         self.assertEqual(search, "That Time I Got Reincarnated as a Slime Season 3")
 
-    def test_slime_s3_3rd_season_ep24_maps_to_72(self):
+    def test_slime_s3_3rd_season_ep24_maps_to_24(self):
         search, ep = resolve_episode_offset(
             "[24/24] Tensei Shitara Slime Datta Ken 3rd Season",
             "Tensei Shitara Slime Datta Ken 3rd Season",
             24,
         )
-        self.assertEqual(ep, 72)
+        self.assertEqual(ep, 24)
         self.assertEqual(search, "That Time I Got Reincarnated as a Slime Season 3")
 
     def test_slime_s3_3rd_season_ep_beyond_max_falls_through_to_identity(self):
@@ -438,14 +439,14 @@ class TestOffsetPrecedence(unittest.TestCase):
     """Unit tests for the strict precedence: table > computed > identity."""
 
     def test_table_entry_beats_computed_value(self):
-        # Slime Season 3 is in table (+48 with search override)
+        # Slime Season 3 is in table (+0 with search override)
         search, ep = resolve_episode_offset(
             "[01/24] That Time I Got Reincarnated as a Slime Season 3",
             "Tensei Shitara Slime Datta Ken 3rd Season",
             1,
             computed_offset=999,
         )
-        self.assertEqual(ep, 49)  # 1 + 48 (table), not 1 + 999
+        self.assertEqual(ep, 1)  # 1 + 0 (table), not 1 + 999
         self.assertEqual(search, "That Time I Got Reincarnated as a Slime Season 3")
 
     def test_computed_used_when_table_misses(self):
