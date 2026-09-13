@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.4.1...ani-cli-sync-v0.4.2) (2026-09-13)
+
+
+### Bug Fixes
+
+* **offsets:** update Slime offsets to 0 for ani-cli 5.1.0 hianime provider ([#33](https://github.com/niStee/ani-cli-sync/issues/33)) ([8b736a6](https://github.com/niStee/ani-cli-sync/commit/8b736a6fc7301413792195140cea6b72a65a04cd))
+
 ## [0.4.1](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.4.0...ani-cli-sync-v0.4.1) (2026-09-09)
 
 
