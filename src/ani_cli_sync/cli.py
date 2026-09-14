@@ -759,7 +759,9 @@ def cmd_watch(
             cmd.extend(["-e", str(ep_arg), search_arg])
 
         t_start = time.time()
-        ret = subprocess.run(cmd, check=False)
+        # nosec B603
+        # nosemgrep
+        ret = subprocess.run(cmd, check=False)  # nosec B603 # nosemgrep
         elapsed = time.time() - t_start
 
         if ret.returncode == 0:

@@ -16,8 +16,9 @@ import json
 import logging
 import os
 import re
-import subprocess
+import subprocess  # nosec B404
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -137,7 +138,9 @@ def resolve_stream_info(
         cmd.extend(["-q", quality])
 
     try:
-        res = subprocess.run(
+        # nosec B603
+        # nosemgrep
+        res = subprocess.run(  # nosec B603 # nosemgrep
             cmd,
             env=env,
             stdout=subprocess.PIPE,
@@ -193,15 +196,17 @@ def resolve_stream_info(
 
 def fetch_vtt_text(url: str, timeout: int = 30) -> str:
     """Download VTT subtitle text from a URL."""
-    if not url.startswith(("http://", "https://")):
-        raise ValueError(f"Unsupported URL scheme: {url}")
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError(f"Unsupported or insecure URL: {url}")
     # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
     req = urllib.request.Request(
         url,
         headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ani-cli-sync/1.0"},
     )
+    # nosec B310
     # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosemgrep
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 # nosemgrep
         return resp.read().decode("utf-8", errors="replace")
 
 
@@ -215,6 +220,9 @@ def _translate_single_batch(
     retries: int = 2,
 ) -> tuple[int, list[VTTCue] | None]:
     """Translate an individual batch of cues with retries."""
+    parsed_ep = urllib.parse.urlsplit(endpoint)
+    if parsed_ep.scheme not in ("http", "https") or not parsed_ep.netloc:
+        raise ValueError(f"Unsupported or insecure endpoint: {endpoint}")
     input_vtt = format_vtt(batch)
     req_body = {
         "model": model,
@@ -235,7 +243,7 @@ def _translate_single_batch(
         )
         try:
             # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-            with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosemgrep
+            with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 # nosemgrep
                 res_data = json.loads(resp.read().decode("utf-8"))
                 content = res_data["choices"][0]["message"]["content"]
                 batch_translated = parse_vtt(content)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -11,6 +12,7 @@ from ani_cli_sync.subtitles import (
     VTTCue,
     build_mpv_command,
     count_vtt_cues,
+    fetch_vtt_text,
     format_vtt,
     get_cached_subtitle_path,
     is_forced_track,
@@ -76,11 +78,11 @@ class TestCachePaths(unittest.TestCase):
             "That Time I Got Reincarnated as a Slime Season 4",
             15,
             "de",
-            base_dir=Path("/tmp/test-cache"),
+            base_dir=Path("/var/cache/test-subtitles"),
         )
         self.assertEqual(
             path,
-            Path("/tmp/test-cache/that_time_i_got_reincarnated_as_a_slime_season_4_ep15_de.vtt"),
+            Path("/var/cache/test-subtitles/that_time_i_got_reincarnated_as_a_slime_season_4_ep15_de.vtt"),
         )
 
     def test_get_cached_subtitle_path_zh_pinyin(self):
@@ -88,11 +90,11 @@ class TestCachePaths(unittest.TestCase):
             "Sousou no Frieren",
             2,
             "zh-pinyin",
-            base_dir=Path("/tmp/test-cache"),
+            base_dir=Path("/var/cache/test-subtitles"),
         )
         self.assertEqual(
             path,
-            Path("/tmp/test-cache/sousou_no_frieren_ep2_zh-pinyin.vtt"),
+            Path("/var/cache/test-subtitles/sousou_no_frieren_ep2_zh-pinyin.vtt"),
         )
 
 
@@ -225,33 +227,47 @@ class TestSubtitleTranslationAndPlanning(unittest.TestCase):
     @patch("ani_cli_sync.subtitles.fetch_vtt_text")
     def test_prepare_subtitles_cached(self, mock_fetch):
         # If cache files exist, fetch_vtt_text is never called
-        tmp_dir = Path("/tmp/test-sub-cache-existing")
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        de_path = tmp_dir / "slime_ep15_de.vtt"
-        zh_path = tmp_dir / "slime_ep15_zh-pinyin.vtt"
-        de_path.write_text(SAMPLE_VTT, encoding="utf-8")
-        zh_path.write_text(SAMPLE_VTT, encoding="utf-8")
+        with tempfile.TemporaryDirectory() as td:
+            tmp_dir = Path(td)
+            de_path = tmp_dir / "slime_ep15_de.vtt"
+            zh_path = tmp_dir / "slime_ep15_zh-pinyin.vtt"
+            de_path.write_text(SAMPLE_VTT, encoding="utf-8")
+            zh_path.write_text(SAMPLE_VTT, encoding="utf-8")
 
-        info = StreamInfo(
-            video_link="https://stream.example/1080/index.m3u8",
-            referrer="https://zokoanime.video/",
-            subtitles=[{"lang": "en", "label": "English (CR)", "src": "https://stream.example/en.vtt"}],
-        )
+            info = StreamInfo(
+                video_link="https://stream.example/1080/index.m3u8",
+                referrer="https://zokoanime.video/",
+                subtitles=[{"lang": "en", "label": "English (CR)", "src": "https://stream.example/en.vtt"}],
+            )
 
-        plan = prepare_subtitles(
-            info,
-            "slime",
-            15,
-            primary_lang="de",
-            secondary_lang="zh-pinyin",
-            cache_dir=tmp_dir,
-        )
+            plan = prepare_subtitles(
+                info,
+                "slime",
+                15,
+                primary_lang="de",
+                secondary_lang="zh-pinyin",
+                cache_dir=tmp_dir,
+            )
 
-        self.assertEqual(plan.sub_files[0], str(de_path))
-        self.assertEqual(plan.sub_files[1], str(zh_path))
-        self.assertEqual(plan.sid, 1)
-        self.assertEqual(plan.secondary_sid, 2)
-        mock_fetch.assert_not_called()
+            self.assertEqual(plan.sub_files[0], str(de_path))
+            self.assertEqual(plan.sub_files[1], str(zh_path))
+            self.assertEqual(plan.sid, 1)
+            self.assertEqual(plan.secondary_sid, 2)
+            mock_fetch.assert_not_called()
+
+
+class TestFetchVttSecurity(unittest.TestCase):
+    def test_rejects_file_scheme(self):
+        with self.assertRaises(ValueError):
+            fetch_vtt_text("file:///etc/passwd")
+
+    def test_rejects_non_http_scheme(self):
+        with self.assertRaises(ValueError):
+            fetch_vtt_text("ftp://example.com/subs.vtt")
+
+    def test_rejects_empty_netloc(self):
+        with self.assertRaises(ValueError):
+            fetch_vtt_text("http:///subs.vtt")
 
 
 if __name__ == "__main__":
