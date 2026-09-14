@@ -132,6 +132,22 @@ class TestStreamInfoResolution(unittest.TestCase):
         info = resolve_stream_info("Nonexistent", 1)
         self.assertIsNone(info)
 
+    @patch("ani_cli_sync.subtitles.subprocess.run")
+    def test_resolve_stream_info_null_skip(self, mock_run):
+        mock_output = (
+            "Selected link:\n"
+            "https://stream.example/1080/index.m3u8\n"
+            'JSON:\n{"download_url":"/download/mal/123/16/sub","src":"https://stream.example/master.m3u8",'
+            '"subtitles":[{"lang":"en","label":"English","src":"https://stream.example/subs/en.vtt"}],'
+            '"skip":null}\n'
+        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=mock_output)
+
+        info = resolve_stream_info("Slime S4", 16)
+        self.assertIsNotNone(info)
+        self.assertIsNone(info.intro_skip)
+        self.assertIsNone(info.outro_skip)
+
 
 class TestMPVCommandBuilder(unittest.TestCase):
     def test_build_mpv_command(self):
@@ -155,8 +171,10 @@ class TestMPVCommandBuilder(unittest.TestCase):
         self.assertIn("--sub-file=https://stream.example/subs/en.vtt", cmd)
         self.assertIn("--sid=1", cmd)
         self.assertIn("--secondary-sid=2", cmd)
-        self.assertIn("--script-opts-append=skip-op_start=107.0,skip-op_end=197.0", cmd)
-        self.assertIn("--script-opts-append=skip-ed_start=1345.0,skip-ed_end=1435.0", cmd)
+        self.assertIn("--script-opts-append=skip-op_start=107.0", cmd)
+        self.assertIn("--script-opts-append=skip-op_end=197.0", cmd)
+        self.assertIn("--script-opts-append=skip-ed_start=1345.0", cmd)
+        self.assertIn("--script-opts-append=skip-ed_end=1435.0", cmd)
         self.assertIn("--force-media-title=Slime Season 4 Episode 15", cmd)
         self.assertEqual(cmd[-1], "https://stream.example/1080/index.m3u8")
 
