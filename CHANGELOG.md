@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.5.0...ani-cli-sync-v0.6.0) (2026-09-14)
+
+
+### Features
+
+* **subtitles:** make secondary subtitles on demand and add background prefetching ([#42](https://github.com/niStee/ani-cli-sync/issues/42)) ([ab99b7e](https://github.com/niStee/ani-cli-sync/commit/ab99b7e0499f0d796083877cbf9702513e46242e))
+
+
+### Bug Fixes
+
+* **subtitles:** handle null skip metadata and separate mpv script-opts-append flags ([#40](https://github.com/niStee/ani-cli-sync/issues/40)) ([a878d5f](https://github.com/niStee/ani-cli-sync/commit/a878d5f826feb8a9cbf048e8155461a15e53df12))
+
 ## [0.5.0](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.4.2...ani-cli-sync-v0.5.0) (2026-09-14)
 
 
