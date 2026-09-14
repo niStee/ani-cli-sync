@@ -743,7 +743,7 @@ def cmd_watch(
                     cmd = build_mpv_command(stream_info, sub_plan, search_arg, ep_arg)
                     if not skip_intro:
                         cmd = [arg for arg in cmd if not arg.startswith("--script-opts-append=skip-")]
-            except (OSError, RuntimeError, ValueError) as e:
+            except Exception as e:
                 print(f"⚠️ Subtitle fallback setup encountered an issue ({e}). Falling back to native ani-cli.")
                 stream_info = None
 

@@ -163,24 +163,33 @@ def resolve_stream_info(
             return None
         json_data = json.loads(json_match.group(1).strip())
 
-        subtitles = json_data.get("subtitles", [])
+        subtitles = json_data.get("subtitles") or []
         refr = "https://zokoanime.video/"
         if "download_url" in json_data:
             refr = "https://zokoanime.video/"
 
         intro_skip = None
         outro_skip = None
-        skip_obj = json_data.get("skip", {})
-        if "intro" in skip_obj and isinstance(skip_obj["intro"], dict):
-            s = skip_obj["intro"].get("start")
-            e = skip_obj["intro"].get("end")
-            if s is not None and e is not None:
-                intro_skip = (float(s), float(e))
-        if "outro" in skip_obj and isinstance(skip_obj["outro"], dict):
-            s = skip_obj["outro"].get("start")
-            e = skip_obj["outro"].get("end")
-            if s is not None and e is not None:
-                outro_skip = (float(s), float(e))
+        skip_obj = json_data.get("skip")
+        if isinstance(skip_obj, dict):
+            intro = skip_obj.get("intro")
+            if isinstance(intro, dict):
+                s = intro.get("start")
+                e = intro.get("end")
+                if s is not None and e is not None:
+                    try:
+                        intro_skip = (float(s), float(e))
+                    except (ValueError, TypeError):
+                        pass
+            outro = skip_obj.get("outro")
+            if isinstance(outro, dict):
+                s = outro.get("start")
+                e = outro.get("end")
+                if s is not None and e is not None:
+                    try:
+                        outro_skip = (float(s), float(e))
+                    except (ValueError, TypeError):
+                        pass
 
         return StreamInfo(
             video_link=video_link,
@@ -189,7 +198,7 @@ def resolve_stream_info(
             intro_skip=intro_skip,
             outro_skip=outro_skip,
         )
-    except (subprocess.SubprocessError, json.JSONDecodeError, OSError) as e:
+    except Exception as e:
         logger.debug("Failed to resolve stream info: %s", e)
         return None
 
@@ -438,10 +447,12 @@ def build_mpv_command(
         cmd.append(f"--secondary-sid={plan.secondary_sid}")
     if stream_info.intro_skip:
         start, end = stream_info.intro_skip
-        cmd.append(f"--script-opts-append=skip-op_start={start},skip-op_end={end}")
+        cmd.append(f"--script-opts-append=skip-op_start={start}")
+        cmd.append(f"--script-opts-append=skip-op_end={end}")
     if stream_info.outro_skip:
         start, end = stream_info.outro_skip
-        cmd.append(f"--script-opts-append=skip-ed_start={start},skip-ed_end={end}")
+        cmd.append(f"--script-opts-append=skip-ed_start={start}")
+        cmd.append(f"--script-opts-append=skip-ed_end={end}")
 
     cmd.append(f"--force-media-title={anime_title} Episode {ep_no}")
     cmd.append(stream_info.video_link)
