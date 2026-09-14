@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.5.0](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.4.2...ani-cli-sync-v0.5.0) (2026-09-14)
+
+
+### Features
+
+* **subtitles:** add automated fallback and dual-subtitles pipeline ([#39](https://github.com/niStee/ani-cli-sync/issues/39)) ([51d0994](https://github.com/niStee/ani-cli-sync/commit/51d099457696895f7b224c901ea0d80a1c8ca9f3))
+
+
+### Bug Fixes
+
+* **offsets:** add Slime Season 4 table entry with 0 offset ([#35](https://github.com/niStee/ani-cli-sync/issues/35)) ([30845a6](https://github.com/niStee/ani-cli-sync/commit/30845a6f03c5c77707fef0cc0efb592c8bd7212f))
+
+
+### Documentation
+
+* pointer to fleet auto-merge policy (ai-infra AUTOMERGE.md) ([#37](https://github.com/niStee/ani-cli-sync/issues/37)) ([da0fb1f](https://github.com/niStee/ani-cli-sync/commit/da0fb1fde4d69e0b3412495de98c7b9d8260cae4))
+
 ## [0.4.2](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.4.1...ani-cli-sync-v0.4.2) (2026-09-13)
 
 
