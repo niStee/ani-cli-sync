@@ -544,7 +544,7 @@ class TestSequelRollover(unittest.TestCase):
             ),
             unittest.mock.patch.object(cli_module.time, "sleep"),
         ):
-            cli_module.cmd_watch(query="Show", autoplay=autoplay)
+            cli_module.cmd_watch(query="Show", autoplay=autoplay, no_sub_fallback=True)
 
         return mock_update, mock_subproc
 
@@ -678,7 +678,7 @@ class TestSequelRollover(unittest.TestCase):
             ),
             unittest.mock.patch.object(cli_module.time, "sleep"),
         ):
-            cli_module.cmd_watch(query="Show", autoplay=True)
+            cli_module.cmd_watch(query="Show", autoplay=True, no_sub_fallback=True)
 
         self.assertIn(unittest.mock.call("tok", 100, 12, status="COMPLETED"), mock_update.call_args_list)
         self.assertIn(unittest.mock.call("tok", 200, 0, status="CURRENT"), mock_update.call_args_list)
@@ -939,6 +939,99 @@ class TestSequelHelpers(unittest.TestCase):
         self.assertTrue(has_table_offset_match("[01/24] That Time I Got Reincarnated as a Slime Season 3", 1))
         self.assertFalse(has_table_offset_match("[01/12] Unlisted Anime Season 2", 1))
 
+    def test_cmd_watch_subtitles_fallback_mpv(self):
+        import ani_cli_sync.cli as cli_module
+        from ani_cli_sync.subtitles import StreamInfo, SubtitlePlan
+
+        mock_update = unittest.mock.MagicMock()
+        mock_subproc = unittest.mock.MagicMock(return_value=unittest.mock.MagicMock(returncode=0))
+        mock_stream = StreamInfo(
+            video_link="https://stream.example/1080/index.m3u8",
+            referrer="https://zokoanime.video/",
+            subtitles=[],
+            intro_skip=(100.0, 190.0),
+        )
+        mock_plan = SubtitlePlan(
+            sub_files=["/cache/de.vtt", "/cache/zh.vtt"],
+            sid=1,
+            secondary_sid=2,
+        )
+
+        with (
+            unittest.mock.patch.object(cli_module, "get_token", return_value="tok"),
+            unittest.mock.patch.object(cli_module, "get_viewer", return_value={"id": 42, "name": "nils"}),
+            unittest.mock.patch.object(
+                cli_module,
+                "get_watching_list",
+                return_value=[
+                    {
+                        "id": 1,
+                        "mediaId": 100,
+                        "progress": 0,
+                        "media": {
+                            "id": 100,
+                            "title": {"english": "Show", "romaji": "Show"},
+                            "episodes": 12,
+                        },
+                    }
+                ],
+            ),
+            unittest.mock.patch("ani_cli_sync.subtitles.resolve_stream_info", return_value=mock_stream),
+            unittest.mock.patch("ani_cli_sync.subtitles.prepare_subtitles", return_value=mock_plan),
+            unittest.mock.patch.object(cli_module, "update_progress", mock_update),
+            unittest.mock.patch.object(cli_module.subprocess, "run", mock_subproc),
+            unittest.mock.patch("builtins.input", return_value="q"),
+            unittest.mock.patch.object(cli_module.time, "time", side_effect=[0.0, 700.0]),
+        ):
+            cli_module.cmd_watch(query="Show")
+
+        self.assertTrue(mock_subproc.called)
+        called_cmd = mock_subproc.call_args[0][0]
+        self.assertEqual(called_cmd[0], "mpv")
+        self.assertIn("--sub-file=/cache/de.vtt", called_cmd)
+        self.assertIn("--sub-file=/cache/zh.vtt", called_cmd)
+        self.assertIn("--sid=1", called_cmd)
+        self.assertIn("--secondary-sid=2", called_cmd)
+
+    def test_cmd_watch_no_sub_fallback(self):
+        import ani_cli_sync.cli as cli_module
+
+        mock_update = unittest.mock.MagicMock()
+        mock_subproc = unittest.mock.MagicMock(return_value=unittest.mock.MagicMock(returncode=0))
+        mock_resolve = unittest.mock.MagicMock()
+
+        with (
+            unittest.mock.patch.object(cli_module, "get_token", return_value="tok"),
+            unittest.mock.patch.object(cli_module, "get_viewer", return_value={"id": 42, "name": "nils"}),
+            unittest.mock.patch.object(
+                cli_module,
+                "get_watching_list",
+                return_value=[
+                    {
+                        "id": 1,
+                        "mediaId": 100,
+                        "progress": 0,
+                        "media": {
+                            "id": 100,
+                            "title": {"english": "Show", "romaji": "Show"},
+                            "episodes": 12,
+                        },
+                    }
+                ],
+            ),
+            unittest.mock.patch("ani_cli_sync.subtitles.resolve_stream_info", mock_resolve),
+            unittest.mock.patch.object(cli_module, "update_progress", mock_update),
+            unittest.mock.patch.object(cli_module.subprocess, "run", mock_subproc),
+            unittest.mock.patch("builtins.input", return_value="q"),
+            unittest.mock.patch.object(cli_module.time, "time", side_effect=[0.0, 700.0]),
+        ):
+            cli_module.cmd_watch(query="Show", no_sub_fallback=True)
+
+        self.assertFalse(mock_resolve.called)
+        called_cmd = mock_subproc.call_args[0][0]
+        self.assertEqual(called_cmd[0], "ani-cli")
+
 
 if __name__ == "__main__":
     unittest.main()
+

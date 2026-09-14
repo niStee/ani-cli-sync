@@ -604,6 +604,9 @@ def cmd_watch(
     dub: bool = False,
     quality: str | None = None,
     autoplay: bool = False,
+    sub_primary: str | None = None,
+    sub_secondary: str | None = None,
+    no_sub_fallback: bool = False,
 ) -> None:
     """Launch ani-cli for an anime, track watch state, and synchronize to AniList."""
     token = get_token()
@@ -717,18 +720,48 @@ def cmd_watch(
             computed_offset=computed_offset,
         )
 
-        print(f"\n▶ Launching ani-cli for '{search_arg}' Episode {ep_arg}...")
-        cmd = ["ani-cli", "--exit-after-play", "-S", "1"]
-        if skip_intro:
-            cmd.append("--skip")
-        if dub:
-            cmd.append("--dub")
-        if quality:
-            cmd.extend(["-q", quality])
-        cmd.extend(["-e", str(ep_arg), search_arg])
+        stream_info = None
+        if not no_sub_fallback and not dub:
+            try:
+                from ani_cli_sync.subtitles import (
+                    build_mpv_command,
+                    prepare_subtitles,
+                    resolve_stream_info,
+                )
+
+                print(f"🔍 Resolving stream and subtitles for '{search_arg}' Episode {ep_arg}...")
+                stream_info = resolve_stream_info(search_arg, ep_arg, quality=quality, dub=dub)
+                if stream_info:
+                    print("✓ Stream resolved. Preparing subtitles (German + Traditional Chinese with Pinyin)...")
+                    sub_plan = prepare_subtitles(
+                        stream_info,
+                        search_arg,
+                        ep_arg,
+                        primary_lang=sub_primary or os.environ.get("ANI_CLI_SYNC_SUB_PRIMARY", "de"),
+                        secondary_lang=sub_secondary or os.environ.get("ANI_CLI_SYNC_SUB_SECONDARY", "zh-pinyin"),
+                    )
+                    cmd = build_mpv_command(stream_info, sub_plan, search_arg, ep_arg)
+                    if not skip_intro:
+                        cmd = [arg for arg in cmd if not arg.startswith("--script-opts-append=skip-")]
+            except (OSError, RuntimeError, ValueError) as e:
+                print(f"⚠️ Subtitle fallback setup encountered an issue ({e}). Falling back to native ani-cli.")
+                stream_info = None
+
+        if not stream_info:
+            print(f"\n▶ Launching ani-cli for '{search_arg}' Episode {ep_arg}...")
+            cmd = ["ani-cli", "--exit-after-play", "-S", "1"]
+            if skip_intro:
+                cmd.append("--skip")
+            if dub:
+                cmd.append("--dub")
+            if quality:
+                cmd.extend(["-q", quality])
+            cmd.extend(["-e", str(ep_arg), search_arg])
 
         t_start = time.time()
-        ret = subprocess.run(cmd)
+        # nosec B603
+        # nosemgrep
+        ret = subprocess.run(cmd, check=False)  # nosec B603 # nosemgrep
         elapsed = time.time() - t_start
 
         if ret.returncode == 0:
@@ -860,6 +893,21 @@ def main() -> None:
         )
         p.add_argument("--no-skip", action="store_true", help="Disable ani-skip intro skipping")
         p.add_argument("--dub", action="store_true", help="Play dubbed version")
+        p.add_argument(
+            "--sub-primary",
+            default=os.environ.get("ANI_CLI_SYNC_SUB_PRIMARY", "de"),
+            help="Primary subtitle language (default: de)",
+        )
+        p.add_argument(
+            "--sub-secondary",
+            default=os.environ.get("ANI_CLI_SYNC_SUB_SECONDARY", "zh-pinyin"),
+            help="Secondary subtitle language (default: zh-pinyin)",
+        )
+        p.add_argument(
+            "--no-sub-fallback",
+            action="store_true",
+            help="Disable automated subtitle synthesis/fallback and use native ani-cli tracks",
+        )
     watch_parser.add_argument("query", nargs="?", default=None, help="Optional anime title to watch directly")
 
     args_list = sys.argv[1:]
@@ -884,6 +932,9 @@ def main() -> None:
             dub=args.dub,
             quality=args.quality,
             autoplay=args.autoplay,
+            sub_primary=args.sub_primary,
+            sub_secondary=args.sub_secondary,
+            no_sub_fallback=args.no_sub_fallback,
         )
     else:
         cmd_watch()
