@@ -93,3 +93,6 @@ re-open it as `CURRENT` as long as `ep < total`.
 - mirror repair path: re-run the workflow (workflow_dispatch), not local
   pushes
 - operations runbook: niStee/network-infra → codeberg-github-migration.md
+## Auto-merge policy
+
+Auto-merge policy: see ai-infra `docs/AUTOMERGE.md` (<https://github.com/niStee/ai-infra/blob/main/docs/AUTOMERGE.md>); agents arm auto-merge only per its Tier-1 preconditions.
