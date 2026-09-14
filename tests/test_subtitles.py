@@ -273,6 +273,52 @@ class TestSubtitleTranslationAndPlanning(unittest.TestCase):
             self.assertEqual(plan.secondary_sid, 2)
             mock_fetch.assert_not_called()
 
+    @patch("ani_cli_sync.subtitles.translate_cues_llm")
+    @patch("ani_cli_sync.subtitles.fetch_vtt_text")
+    def test_prepare_subtitles_default_secondary_none(self, mock_fetch, mock_translate):
+        with tempfile.TemporaryDirectory() as td:
+            tmp_dir = Path(td)
+            mock_fetch.return_value = SAMPLE_VTT
+            mock_translate.return_value = parse_vtt(SAMPLE_VTT)
+
+            info = StreamInfo(
+                video_link="https://stream.example/1080/index.m3u8",
+                referrer="https://zokoanime.video/",
+                subtitles=[{"lang": "en", "label": "English (CR)", "src": "https://stream.example/en.vtt"}],
+            )
+
+            plan = prepare_subtitles(
+                info,
+                "slime",
+                15,
+                primary_lang="de",
+                secondary_lang=None,
+                cache_dir=tmp_dir,
+            )
+
+            # German translated once, Chinese never translated
+            self.assertEqual(mock_translate.call_count, 1)
+            self.assertEqual(mock_translate.call_args[1]["target_lang"], "de")
+            # Secondary track falls back to stream English
+            self.assertEqual(len(plan.sub_files), 2)
+            self.assertEqual(plan.sub_files[1], "https://stream.example/en.vtt")
+            self.assertEqual(plan.sid, 1)
+            self.assertEqual(plan.secondary_sid, 2)
+
+    @patch("ani_cli_sync.subtitles.prepare_subtitles")
+    @patch("ani_cli_sync.subtitles.resolve_stream_info")
+    def test_prefetch_next_episode(self, mock_resolve, mock_prepare):
+        info = StreamInfo(video_link="https://stream.example/video.m3u8", referrer="https://zokoanime.video/", subtitles=[])
+        mock_resolve.return_value = info
+
+        from ani_cli_sync.subtitles import prefetch_next_episode
+        prefetch_next_episode("Show", 2, primary_lang="de", secondary_lang=None)
+
+        mock_resolve.assert_called_once_with("Show", 2, quality=None, dub=False)
+        mock_prepare.assert_called_once()
+        self.assertEqual(mock_prepare.call_args[1]["primary_lang"], "de")
+        self.assertIsNone(mock_prepare.call_args[1]["secondary_lang"])
+
 
 class TestFetchVttSecurity(unittest.TestCase):
     def test_rejects_file_scheme(self):
