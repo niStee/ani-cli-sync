@@ -157,7 +157,7 @@ options:
   --sub-primary SUB_PRIMARY
                         Primary subtitle language (default: de, env: ANI_CLI_SYNC_SUB_PRIMARY)
   --sub-secondary SUB_SECONDARY
-                        Secondary subtitle language (default: zh-pinyin, env: ANI_CLI_SYNC_SUB_SECONDARY)
+                        Secondary subtitle language on demand (e.g. zh-pinyin; default: stream English or none, env: ANI_CLI_SYNC_SUB_SECONDARY)
   --no-sub-fallback     Disable automated subtitle synthesis/fallback and use native ani-cli tracks
 ```
 
@@ -171,13 +171,14 @@ When watching anime, provider subtitle tracks are frequently incomplete (e.g. Ge
 
 1. **Track Density Validation (Forced vs. Dialogue)**: Inspects candidate stream subtitles. Any track with `< 50` cues is flagged as a forced signs-only track and bypassed for dialogue.
 2. **Deterministic Stream Sync**: Uses the stream's full English WebVTT track directly from the HLS manifest as the structural foundation, guaranteeing **0ms timing drift** and matching intro/outro cuts without slow audio-correlation alignment.
-3. **Context-Aware G2P & Concurrent Translation**: Translates cues via the local LiteLLM proxy (`deepseek-v4-flash`) using parallel threads (`ThreadPoolExecutor`):
-   - **Primary Subtitle (`--sid=1`, bottom)**: Natural, localized German dialogue.
-   - **Secondary Subtitle (`--secondary-sid=2`, top)**: Two-line cues for language learning and cross-reading:
-     - **Line 1 (Top)**: Context-accurate Hanyu Pinyin with tone marks (resolving *duōyīnzì* polyphones like 銀行 *háng* vs. 行走 *xíng*).
-     - **Line 2 (Bottom)**: Clean Traditional Chinese characters (繁體中文).
-4. **Local Disk Caching**: Generated files are stored at `~/.cache/ani-cli/subtitles/{anime_slug}_ep{ep}_{lang}.vtt`. Subsequent viewings yield a **0.0003s instant cache hit**.
-5. **Clean Player Integration**: Passes all tracks to `mpv` along with the original stream English track, allowing seamless on-the-fly track switching (`k` / `Alt+j`).
+3. **Optimized Concurrent Translation**:
+   - **Primary Subtitle (`--sid=1`, bottom)**: Natural, localized German dialogue translated via the local LiteLLM proxy (`deepseek-v4-flash`).
+   - **Secondary Subtitle (`--secondary-sid=2`, top)**:
+     - By default, falls back directly to the stream's English track with **0s translation latency**.
+     - **On-demand CJK learning track** (`--sub-secondary zh-pinyin` / `ANI_CLI_SYNC_SUB_SECONDARY=zh-pinyin`): Generates two-line cues with context-accurate Hanyu Pinyin with tone marks (resolving *duōyīnzì* polyphones like 銀行 *háng* vs. 行走 *xíng*) on top and Traditional Chinese (繁體中文) on bottom.
+4. **Lookahead Background Prefetching**: When Episode $N$ begins playback, a background daemon thread quietly pre-fetches and prepares subtitles for Episode $N+1$. When you finish the episode, the next episode launches with **0s wait time**.
+5. **Local Disk Caching**: Generated files are stored at `~/.cache/ani-cli/subtitles/{anime_slug}_ep{ep}_{lang}.vtt`. Subsequent viewings yield a **0.0003s instant cache hit**.
+6. **Clean Player Integration**: Passes all tracks to `mpv` along with the original stream English track, allowing seamless on-the-fly track switching (`k` / `Alt+j`).
 
 ---
 

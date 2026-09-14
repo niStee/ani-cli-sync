@@ -277,7 +277,7 @@ def translate_cues_llm(
     target_lang: str,
     api_base: str = DEFAULT_API_BASE,
     model: str = DEFAULT_MODEL,
-    batch_size: int = 25,
+    batch_size: int = 50,
     max_workers: int = 5,
 ) -> list[VTTCue] | None:
     """
@@ -339,17 +339,19 @@ def prepare_subtitles(
     anime_title: str,
     ep_no: int,
     primary_lang: str = "de",
-    secondary_lang: str = "zh-pinyin",
+    secondary_lang: str | None = None,
     cache_dir: Path | None = None,
     api_base: str = DEFAULT_API_BASE,
     model: str = DEFAULT_MODEL,
 ) -> SubtitlePlan:
     """
     Prepare and validate subtitle tracks.
-    1. Checks local cache for primary and secondary tracks.
+    1. Checks local cache for primary and (if requested) secondary tracks.
     2. Inspects stream tracks: if stream has full primary (cue_count >= 50), uses it.
-    3. If primary is missing/forced or secondary is missing, translates using base English track.
-    4. Caches all generated files and returns an MPV SubtitlePlan.
+    3. If primary is missing/forced, translates using base English track.
+    4. If secondary_lang is explicitly requested and missing, translates on demand.
+    5. If secondary_lang is None and stream has English, attaches English as secondary (0s delay).
+    6. Caches all generated files and returns an MPV SubtitlePlan.
     """
     if cache_dir is None:
         cache_base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
@@ -357,10 +359,16 @@ def prepare_subtitles(
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     primary_cache_path = get_cached_subtitle_path(anime_title, ep_no, primary_lang, base_dir=cache_dir)
-    secondary_cache_path = get_cached_subtitle_path(anime_title, ep_no, secondary_lang, base_dir=cache_dir)
+    secondary_cache_path = (
+        get_cached_subtitle_path(anime_title, ep_no, secondary_lang, base_dir=cache_dir)
+        if secondary_lang
+        else None
+    )
 
     primary_file: str | None = str(primary_cache_path) if primary_cache_path.is_file() else None
-    secondary_file: str | None = str(secondary_cache_path) if secondary_cache_path.is_file() else None
+    secondary_file: str | None = (
+        str(secondary_cache_path) if (secondary_cache_path and secondary_cache_path.is_file()) else None
+    )
 
     # Identify candidate tracks on the stream
     stream_de_url = None
@@ -386,22 +394,25 @@ def prepare_subtitles(
         except (urllib.error.URLError, OSError) as e:
             logger.debug("Failed to fetch stream German subtitle: %s", e)
 
-    # If primary or secondary still need generation, download base English track
-    if (not primary_file or not secondary_file) and stream_en_url:
+    # If primary or on-demand secondary still need generation, download base English track
+    needs_primary_translation = not primary_file
+    needs_secondary_translation = bool(secondary_lang and not secondary_file)
+
+    if (needs_primary_translation or needs_secondary_translation) and stream_en_url:
         try:
             base_content = fetch_vtt_text(stream_en_url)
             base_cues = parse_vtt(base_content)
 
-            if not primary_file:
+            if needs_primary_translation:
                 translated_de = translate_cues_llm(base_cues, target_lang="de", api_base=api_base, model=model)
                 if translated_de:
                     primary_cache_path.write_text(format_vtt(translated_de), encoding="utf-8")
                     primary_file = str(primary_cache_path)
 
-            if not secondary_file:
-                translated_zh = translate_cues_llm(base_cues, target_lang="zh-pinyin", api_base=api_base, model=model)
-                if translated_zh:
-                    secondary_cache_path.write_text(format_vtt(translated_zh), encoding="utf-8")
+            if needs_secondary_translation and secondary_cache_path and secondary_lang:
+                translated_sec = translate_cues_llm(base_cues, target_lang=secondary_lang, api_base=api_base, model=model)
+                if translated_sec:
+                    secondary_cache_path.write_text(format_vtt(translated_sec), encoding="utf-8")
                     secondary_file = str(secondary_cache_path)
         except (urllib.error.URLError, OSError) as e:
             logger.debug("Failed to translate fallback subtitles: %s", e)
@@ -417,8 +428,7 @@ def prepare_subtitles(
 
     if secondary_file:
         sub_files.append(secondary_file)
-
-    if stream_en_url and stream_en_url not in sub_files:
+    elif stream_en_url and stream_en_url not in sub_files:
         sub_files.append(stream_en_url)
 
     # Adjust track indices if tracks are missing
@@ -426,6 +436,34 @@ def prepare_subtitles(
         secondary_sid = 0
 
     return SubtitlePlan(sub_files=sub_files, sid=sid, secondary_sid=secondary_sid)
+
+
+def prefetch_next_episode(
+    anime_title: str,
+    ep_no: int,
+    primary_lang: str = "de",
+    secondary_lang: str | None = None,
+    quality: str | None = None,
+    dub: bool = False,
+    api_base: str = DEFAULT_API_BASE,
+    model: str = DEFAULT_MODEL,
+) -> None:
+    """Pre-fetch and pre-translate the next episode's subtitles in the background."""
+    try:
+        next_info = resolve_stream_info(anime_title, ep_no, quality=quality, dub=dub)
+        if next_info:
+            prepare_subtitles(
+                next_info,
+                anime_title,
+                ep_no,
+                primary_lang=primary_lang,
+                secondary_lang=secondary_lang,
+                api_base=api_base,
+                model=model,
+            )
+            logger.info("Prefetched subtitles for '%s' Ep %d", anime_title, ep_no)
+    except Exception as e:
+        logger.debug("Prefetch for '%s' Ep %d encountered an issue: %s", anime_title, ep_no, e)
 
 
 def build_mpv_command(

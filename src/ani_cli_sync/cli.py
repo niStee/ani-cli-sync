@@ -19,6 +19,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -725,24 +726,42 @@ def cmd_watch(
             try:
                 from ani_cli_sync.subtitles import (
                     build_mpv_command,
+                    prefetch_next_episode,
                     prepare_subtitles,
                     resolve_stream_info,
                 )
 
+                sec_lang = sub_secondary or os.environ.get("ANI_CLI_SYNC_SUB_SECONDARY", None)
+                sub_target_desc = "German" if not sec_lang else f"German + {sec_lang}"
                 print(f"🔍 Resolving stream and subtitles for '{search_arg}' Episode {ep_arg}...")
                 stream_info = resolve_stream_info(search_arg, ep_arg, quality=quality, dub=dub)
                 if stream_info:
-                    print("✓ Stream resolved. Preparing subtitles (German + Traditional Chinese with Pinyin)...")
+                    print(f"✓ Stream resolved. Preparing subtitles ({sub_target_desc})...")
                     sub_plan = prepare_subtitles(
                         stream_info,
                         search_arg,
                         ep_arg,
                         primary_lang=sub_primary or os.environ.get("ANI_CLI_SYNC_SUB_PRIMARY", "de"),
-                        secondary_lang=sub_secondary or os.environ.get("ANI_CLI_SYNC_SUB_SECONDARY", "zh-pinyin"),
+                        secondary_lang=sec_lang,
                     )
                     cmd = build_mpv_command(stream_info, sub_plan, search_arg, ep_arg)
                     if not skip_intro:
                         cmd = [arg for arg in cmd if not arg.startswith("--script-opts-append=skip-")]
+
+                    # Lookahead: quietly prefetch next episode subtitles in background while current episode plays
+                    if total_eps is None or (curr_ep_to_play + 1 <= total_eps):
+                        threading.Thread(
+                            target=prefetch_next_episode,
+                            kwargs={
+                                "anime_title": search_arg,
+                                "ep_no": curr_ep_to_play + 1,
+                                "primary_lang": sub_primary or os.environ.get("ANI_CLI_SYNC_SUB_PRIMARY", "de"),
+                                "secondary_lang": sec_lang,
+                                "quality": quality,
+                                "dub": dub,
+                            },
+                            daemon=True,
+                        ).start()
             except Exception as e:
                 print(f"⚠️ Subtitle fallback setup encountered an issue ({e}). Falling back to native ani-cli.")
                 stream_info = None
@@ -900,8 +919,8 @@ def main() -> None:
         )
         p.add_argument(
             "--sub-secondary",
-            default=os.environ.get("ANI_CLI_SYNC_SUB_SECONDARY", "zh-pinyin"),
-            help="Secondary subtitle language (default: zh-pinyin)",
+            default=os.environ.get("ANI_CLI_SYNC_SUB_SECONDARY", None),
+            help="Secondary subtitle language on demand (e.g. zh-pinyin; default: stream English or none)",
         )
         p.add_argument(
             "--no-sub-fallback",
