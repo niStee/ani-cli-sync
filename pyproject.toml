@@ -39,6 +39,7 @@ Issues = "https://github.com/niStee/ani-cli-sync/issues"
 [project.scripts]
 ani-cli-sync = "ani_cli_sync.cli:main"
 ani-sync = "ani_cli_sync.cli:main"
+ani-cli-menu = "ani_cli_sync.menu:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ani_cli_sync"]

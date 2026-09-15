@@ -26,6 +26,8 @@ import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
+from ani_cli_sync.menu import prepare_menu_env
+
 ANILIST_API = "https://graphql.anilist.co"
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "anilist"
 TOKEN_FILE = CONFIG_DIR / "token"
@@ -608,6 +610,7 @@ def cmd_watch(
     sub_primary: str | None = None,
     sub_secondary: str | None = None,
     no_sub_fallback: bool = False,
+    uncensored: bool = True,
 ) -> None:
     """Launch ani-cli for an anime, track watch state, and synchronize to AniList."""
     token = get_token()
@@ -734,7 +737,13 @@ def cmd_watch(
                 sec_lang = sub_secondary or os.environ.get("ANI_CLI_SYNC_SUB_SECONDARY", None)
                 sub_target_desc = "German" if not sec_lang else f"German + {sec_lang}"
                 print(f"🔍 Resolving stream and subtitles for '{search_arg}' Episode {ep_arg}...")
-                stream_info = resolve_stream_info(search_arg, ep_arg, quality=quality, dub=dub)
+                stream_info = resolve_stream_info(
+                    search_arg,
+                    ep_arg,
+                    quality=quality,
+                    dub=dub,
+                    uncensored=uncensored,
+                )
                 if stream_info:
                     print(f"✓ Stream resolved. Preparing subtitles ({sub_target_desc})...")
                     sub_plan = prepare_subtitles(
@@ -759,6 +768,7 @@ def cmd_watch(
                                 "secondary_lang": sec_lang,
                                 "quality": quality,
                                 "dub": dub,
+                                "uncensored": uncensored,
                             },
                             daemon=True,
                         ).start()
@@ -768,7 +778,8 @@ def cmd_watch(
 
         if not stream_info:
             print(f"\n▶ Launching ani-cli for '{search_arg}' Episode {ep_arg}...")
-            cmd = ["ani-cli", "--exit-after-play", "-S", "1"]
+            menu_env = prepare_menu_env(target_title=search_arg, uncensored=uncensored)
+            cmd = ["ani-cli", "--exit-after-play"]
             if skip_intro:
                 cmd.append("--skip")
             if dub:
@@ -777,11 +788,17 @@ def cmd_watch(
                 cmd.extend(["-q", quality])
             cmd.extend(["-e", str(ep_arg), search_arg])
 
-        t_start = time.time()
-        # nosec B603
-        # nosemgrep
-        ret = subprocess.run(cmd, check=False)  # nosec B603 # nosemgrep
-        elapsed = time.time() - t_start
+            t_start = time.time()
+            # nosec B603
+            # nosemgrep
+            ret = subprocess.run(cmd, env=menu_env, check=False)  # nosec B603 # nosemgrep
+            elapsed = time.time() - t_start
+        else:
+            t_start = time.time()
+            # nosec B603
+            # nosemgrep
+            ret = subprocess.run(cmd, check=False)  # nosec B603 # nosemgrep
+            elapsed = time.time() - t_start
 
         if ret.returncode == 0:
             # elapsed now correctly measures actual mpv watch time because --no-detach
@@ -927,6 +944,13 @@ def main() -> None:
             action="store_true",
             help="Disable automated subtitle synthesis/fallback and use native ani-cli tracks",
         )
+        p.add_argument(
+            "--uncensored",
+            dest="uncensored",
+            action=argparse.BooleanOptionalAction,
+            default=os.environ.get("ANI_CLI_SYNC_UNCENSORED", "1").lower() in ("1", "true", "yes"),
+            help="Prefer uncensored/AT-X/Blu-ray releases when available (default: true, disable with --no-uncensored)",
+        )
     watch_parser.add_argument("query", nargs="?", default=None, help="Optional anime title to watch directly")
 
     args_list = sys.argv[1:]
@@ -954,9 +978,10 @@ def main() -> None:
             sub_primary=args.sub_primary,
             sub_secondary=args.sub_secondary,
             no_sub_fallback=args.no_sub_fallback,
+            uncensored=args.uncensored,
         )
     else:
-        cmd_watch()
+        cmd_watch(uncensored=args.uncensored)
 
 
 if __name__ == "__main__":

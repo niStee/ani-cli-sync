@@ -1031,6 +1031,62 @@ class TestSequelHelpers(unittest.TestCase):
         called_cmd = mock_subproc.call_args[0][0]
         self.assertEqual(called_cmd[0], "ani-cli")
 
+    def test_cmd_watch_passes_uncensored_to_resolve(self):
+        import ani_cli_sync.cli as cli_module
+
+        mock_update = unittest.mock.MagicMock()
+        mock_subproc = unittest.mock.MagicMock(return_value=unittest.mock.MagicMock(returncode=0))
+        mock_resolve = unittest.mock.MagicMock(return_value=None)
+
+        with (
+            unittest.mock.patch.object(cli_module, "get_token", return_value="tok"),
+            unittest.mock.patch.object(cli_module, "get_viewer", return_value={"id": 42, "name": "nils"}),
+            unittest.mock.patch.object(
+                cli_module,
+                "get_watching_list",
+                return_value=[
+                    {
+                        "id": 1,
+                        "mediaId": 100,
+                        "progress": 0,
+                        "media": {
+                            "id": 100,
+                            "title": {"english": "Show", "romaji": "Show"},
+                            "episodes": 12,
+                        },
+                    }
+                ],
+            ),
+            unittest.mock.patch("ani_cli_sync.subtitles.resolve_stream_info", mock_resolve),
+            unittest.mock.patch.object(cli_module, "update_progress", mock_update),
+            unittest.mock.patch.object(cli_module.subprocess, "run", mock_subproc),
+            unittest.mock.patch("builtins.input", return_value="q"),
+            unittest.mock.patch.object(cli_module.time, "time", side_effect=[0.0, 700.0]),
+        ):
+            cli_module.cmd_watch(query="Show", uncensored=True)
+
+        self.assertTrue(mock_resolve.called)
+        self.assertEqual(mock_resolve.call_args[1].get("uncensored"), True)
+        called_cmd = mock_subproc.call_args[0][0]
+        self.assertNotIn("-S", called_cmd)
+        called_env = mock_subproc.call_args[1].get("env", {})
+        self.assertEqual(called_env.get("ANI_CLI_SYNC_UNCENSORED"), "1")
+
+    def test_cli_uncensored_args(self):
+        import ani_cli_sync.cli as cli_module
+
+        with unittest.mock.patch.object(cli_module, "cmd_watch") as mock_watch:
+            with unittest.mock.patch("sys.argv", ["ani-cli-sync", "watch", "--no-uncensored", "Show"]):
+                cli_module.main()
+            mock_watch.assert_called_once()
+            self.assertFalse(mock_watch.call_args[1]["uncensored"])
+
+        with unittest.mock.patch.object(cli_module, "cmd_watch") as mock_watch:
+            with unittest.mock.patch("sys.argv", ["ani-cli-sync", "watch", "--uncensored", "Show"]):
+                cli_module.main()
+            mock_watch.assert_called_once()
+            self.assertTrue(mock_watch.call_args[1]["uncensored"])
+
 
 if __name__ == "__main__":
     unittest.main()
