@@ -148,6 +148,34 @@ class TestStreamInfoResolution(unittest.TestCase):
         self.assertIsNone(info.intro_skip)
         self.assertIsNone(info.outro_skip)
 
+    @patch("ani_cli_sync.subtitles.subprocess.run")
+    def test_resolve_stream_info_uncensored_env(self, mock_run):
+        mock_output = (
+            "Selected link:\nhttps://stream.example/1080/index.m3u8\n"
+            'JSON:{"subtitles":[]}\n'
+        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=mock_output)
+
+        resolve_stream_info("High School DxD", 1, uncensored=True)
+        self.assertTrue(mock_run.called)
+        called_env = mock_run.call_args[1].get("env", {})
+        self.assertIn("ANI_CLI_MENU", called_env)
+        self.assertEqual(called_env.get("ANI_CLI_SYNC_UNCENSORED"), "1")
+        self.assertEqual(called_env.get("ANI_CLI_SYNC_TARGET_TITLE"), "High School DxD")
+
+    @patch("ani_cli_sync.subtitles.subprocess.run")
+    def test_resolve_stream_info_censored_env(self, mock_run):
+        mock_output = (
+            "Selected link:\nhttps://stream.example/1080/index.m3u8\n"
+            'JSON:{"subtitles":[]}\n'
+        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=mock_output)
+
+        resolve_stream_info("High School DxD", 1, uncensored=False)
+        self.assertTrue(mock_run.called)
+        called_env = mock_run.call_args[1].get("env", {})
+        self.assertEqual(called_env.get("ANI_CLI_SYNC_UNCENSORED"), "0")
+
 
 class TestMPVCommandBuilder(unittest.TestCase):
     def test_build_mpv_command(self):
@@ -312,9 +340,9 @@ class TestSubtitleTranslationAndPlanning(unittest.TestCase):
         mock_resolve.return_value = info
 
         from ani_cli_sync.subtitles import prefetch_next_episode
-        prefetch_next_episode("Show", 2, primary_lang="de", secondary_lang=None)
+        prefetch_next_episode("Show", 2, primary_lang="de", secondary_lang=None, uncensored=True)
 
-        mock_resolve.assert_called_once_with("Show", 2, quality=None, dub=False)
+        mock_resolve.assert_called_once_with("Show", 2, quality=None, dub=False, uncensored=True)
         mock_prepare.assert_called_once()
         self.assertEqual(mock_prepare.call_args[1]["primary_lang"], "de")
         self.assertIsNone(mock_prepare.call_args[1]["secondary_lang"])
