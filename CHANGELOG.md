@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.0](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.6.0...ani-cli-sync-v0.7.0) (2026-09-16)
+
+
+### Features
+
+* **stream:** add automated two-pass probe fallback for episode offsets ([#46](https://github.com/niStee/ani-cli-sync/issues/46)) ([bacb35d](https://github.com/niStee/ani-cli-sync/commit/bacb35dca22593f7480a7c1e6e2635b92c84efca))
+* **stream:** prioritize uncensored/AT-X/Blu-ray cuts with automated menu selector ([#43](https://github.com/niStee/ani-cli-sync/issues/43)) ([3a3ffd3](https://github.com/niStee/ani-cli-sync/commit/3a3ffd38fe5ef38d186fcb8fc2409b99b7a99a48))
+
 ## [0.6.0](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.5.0...ani-cli-sync-v0.6.0) (2026-09-14)
 
 
