@@ -468,6 +468,16 @@ class TestOffsetPrecedence(unittest.TestCase):
         self.assertEqual(ep, 1)  # 1 + 0 (table), not 1 + 999
         self.assertEqual(search, "That Time I Got Reincarnated as a Slime Season 3")
 
+    def test_overlord_iii_independent_numbering(self):
+        search, ep = resolve_episode_offset(
+            "[00/13] Overlord III | Overlord III",
+            "Overlord III",
+            1,
+            computed_offset=26,
+        )
+        self.assertEqual(ep, 1)
+        self.assertEqual(search, "Overlord III")
+
     def test_computed_used_when_table_misses(self):
         search, ep = resolve_episode_offset(
             "[01/12] Unlisted Anime Season 2",
@@ -1088,6 +1098,132 @@ class TestSequelHelpers(unittest.TestCase):
             self.assertTrue(mock_watch.call_args[1]["uncensored"])
 
 
+
+class TestEpisodeProbeFallback(unittest.TestCase):
+    """Unit tests for the two-pass probe and fallback when continuous offset fails."""
+
+    def test_stream_resolution_probe_fallback_to_season_relative(self):
+        """When resolve_stream_info fails on continuous ep (e.g. 25), retry season ep (1) and cache 0."""
+        import ani_cli_sync.cli as cli_module
+        from ani_cli_sync.subtitles import StreamInfo, SubtitlePlan
+
+        cli_module._PREQUEL_OFFSET_CACHE.clear()
+
+        mock_stream = StreamInfo(
+            video_link="https://video.example.com/master.m3u8",
+            referrer="https://zokoanime.video/",
+            subtitles=[],
+            intro_skip=None,
+            outro_skip=None,
+        )
+        mock_plan = SubtitlePlan(sub_files=["/cache/de.vtt"])
+
+        # Mock resolve_stream_info to fail on ep 25, succeed on ep 1
+        def mock_resolve(search_arg, ep_no, **kwargs):
+            if ep_no == 25:
+                return None
+            if ep_no == 1:
+                return mock_stream
+            return None
+
+        mock_update = unittest.mock.MagicMock()
+        mock_subproc = unittest.mock.MagicMock(return_value=unittest.mock.MagicMock(returncode=0))
+        mock_prepare = unittest.mock.MagicMock(return_value=mock_plan)
+
+        with (
+            unittest.mock.patch.object(cli_module, "get_token", return_value="tok"),
+            unittest.mock.patch.object(cli_module, "get_viewer", return_value={"id": 42, "name": "nils"}),
+            unittest.mock.patch.object(
+                cli_module,
+                "get_watching_list",
+                return_value=[
+                    {
+                        "id": 1,
+                        "mediaId": 300,
+                        "progress": 0,
+                        "media": {
+                            "id": 300,
+                            "title": {"english": "Unlisted Show S3", "romaji": "Unlisted Show S3"},
+                            "episodes": 12,
+                        },
+                    }
+                ],
+            ),
+            unittest.mock.patch.object(cli_module, "compute_prequel_offset", return_value=24),
+            unittest.mock.patch("ani_cli_sync.subtitles.resolve_stream_info", side_effect=mock_resolve) as mock_res_spy,
+            unittest.mock.patch("ani_cli_sync.subtitles.prepare_subtitles", mock_prepare),
+            unittest.mock.patch("ani_cli_sync.subtitles.prefetch_next_episode"),
+            unittest.mock.patch.object(cli_module, "update_progress", mock_update),
+            unittest.mock.patch.object(cli_module.subprocess, "run", mock_subproc),
+            unittest.mock.patch("builtins.input", return_value="q"),
+            unittest.mock.patch.object(cli_module.time, "time", side_effect=[0.0, 700.0]),
+        ):
+            cli_module.cmd_watch(query="Unlisted Show S3")
+
+        # Must have probed 25 first, then fallen back to 1
+        self.assertEqual(mock_res_spy.call_count, 2)
+        self.assertEqual(mock_res_spy.call_args_list[0][0][1], 25)
+        self.assertEqual(mock_res_spy.call_args_list[1][0][1], 1)
+
+        # prepare_subtitles and mpv must have received episode 1
+        mock_prepare.assert_called_once()
+        self.assertEqual(mock_prepare.call_args[0][2], 1)
+
+        # Cache must be updated to 0 for subsequent episodes
+        self.assertEqual(cli_module._PREQUEL_OFFSET_CACHE.get(300), 0)
+
+    def test_native_ani_cli_probe_fallback_on_fast_failure(self):
+        """When native ani-cli fails on continuous ep (e.g. 25 in < 5s), retry season ep (1)."""
+        import ani_cli_sync.cli as cli_module
+
+        cli_module._PREQUEL_OFFSET_CACHE.clear()
+
+        # First run fails fast (1s, code 1); second run succeeds (700s, code 0)
+        ret1 = unittest.mock.MagicMock(returncode=1)
+        ret2 = unittest.mock.MagicMock(returncode=0)
+        mock_subproc = unittest.mock.MagicMock(side_effect=[ret1, ret2])
+        mock_update = unittest.mock.MagicMock()
+
+        with (
+            unittest.mock.patch.object(cli_module, "get_token", return_value="tok"),
+            unittest.mock.patch.object(cli_module, "get_viewer", return_value={"id": 42, "name": "nils"}),
+            unittest.mock.patch.object(
+                cli_module,
+                "get_watching_list",
+                return_value=[
+                    {
+                        "id": 1,
+                        "mediaId": 300,
+                        "progress": 0,
+                        "media": {
+                            "id": 300,
+                            "title": {"english": "Unlisted Show S3", "romaji": "Unlisted Show S3"},
+                            "episodes": 12,
+                        },
+                    }
+                ],
+            ),
+            unittest.mock.patch.object(cli_module, "compute_prequel_offset", return_value=24),
+            unittest.mock.patch.object(cli_module, "update_progress", mock_update),
+            unittest.mock.patch.object(cli_module.subprocess, "run", mock_subproc),
+            unittest.mock.patch("builtins.input", return_value="q"),
+            # Timestamps: run1 start=0.0, end=1.0 (elapsed 1s); run2 start=1.0, end=701.0 (elapsed 700s)
+            unittest.mock.patch.object(cli_module.time, "time", side_effect=[0.0, 1.0, 1.0, 701.0]),
+        ):
+            cli_module.cmd_watch(query="Unlisted Show S3", no_sub_fallback=True)
+
+        self.assertEqual(mock_subproc.call_count, 2)
+        cmd1 = mock_subproc.call_args_list[0][0][0]
+        cmd2 = mock_subproc.call_args_list[1][0][0]
+        self.assertIn("-e", cmd1)
+        self.assertEqual(cmd1[cmd1.index("-e") + 1], "25")
+        self.assertIn("-e", cmd2)
+        self.assertEqual(cmd2[cmd2.index("-e") + 1], "1")
+
+        self.assertEqual(cli_module._PREQUEL_OFFSET_CACHE.get(300), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
