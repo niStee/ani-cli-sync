@@ -475,6 +475,9 @@ _EPISODE_OFFSETS: list[tuple[str, str | None, int, int]] = [
     ("Slime Season 2", "That Time I Got Reincarnated as a Slime Season 2", 12, 0),
     ("Slime 2nd Season", "That Time I Got Reincarnated as a Slime Season 2", 12, 0),
     ("Tensei Shitara Slime Datta Ken 2nd Season", "That Time I Got Reincarnated as a Slime Season 2", 12, 0),
+    # Overlord III & IV: provider uses per-season numbering, offset 0 guards against prequel chain
+    ("Overlord III", "Overlord III", 13, 0),
+    ("Overlord IV", "Overlord IV", 13, 0),
 ]
 
 
@@ -744,6 +747,22 @@ def cmd_watch(
                     dub=dub,
                     uncensored=uncensored,
                 )
+                if not stream_info and ep_arg != curr_ep_to_play:
+                    print(
+                        f"ℹ️ Continuous Episode {ep_arg} not found on provider. "
+                        f"Falling back to season-relative Episode {curr_ep_to_play}..."
+                    )
+                    stream_info = resolve_stream_info(
+                        search_arg,
+                        curr_ep_to_play,
+                        quality=quality,
+                        dub=dub,
+                        uncensored=uncensored,
+                    )
+                    if stream_info:
+                        ep_arg = curr_ep_to_play
+                        _PREQUEL_OFFSET_CACHE[media_id] = 0
+
                 if stream_info:
                     print(f"✓ Stream resolved. Preparing subtitles ({sub_target_desc})...")
                     sub_plan = prepare_subtitles(
@@ -793,6 +812,24 @@ def cmd_watch(
             # nosemgrep
             ret = subprocess.run(cmd, env=menu_env, check=False)  # nosec B603 # nosemgrep
             elapsed = time.time() - t_start
+
+            if (ret.returncode != 0 or elapsed < 5) and ep_arg != curr_ep_to_play:
+                print(
+                    f"ℹ️ Continuous Episode {ep_arg} failed. "
+                    f"Retrying season-relative Episode {curr_ep_to_play}..."
+                )
+                retry_cmd = list(cmd)
+                if "-e" in retry_cmd:
+                    ep_idx = retry_cmd.index("-e") + 1
+                    retry_cmd[ep_idx] = str(curr_ep_to_play)
+                t_start = time.time()
+                # nosec B603
+                # nosemgrep
+                ret = subprocess.run(retry_cmd, env=menu_env, check=False)  # nosec B603 # nosemgrep
+                elapsed = time.time() - t_start
+                if ret.returncode == 0 and elapsed >= 5:
+                    ep_arg = curr_ep_to_play
+                    _PREQUEL_OFFSET_CACHE[media_id] = 0
         else:
             t_start = time.time()
             # nosec B603

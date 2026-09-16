@@ -212,26 +212,28 @@ When you finish the final episode of a season, `ani-cli-sync` automatically quer
 
 ---
 
-## 🔢 Multi-Season Episode Offsets
+## 🔢 Multi-Season Episode Offsets & Automated Probe Fallback
 
 Some scraper backends (e.g. gogoanime via AniDB) use **absolute continuous episode numbering** across
-seasons, while AniList resets to episode 1 for each season entry. `ani-cli-sync` translates AniList
-episode numbers to the scraper episode numbers using a strict 3-tier precedence:
+seasons, while others (such as HiAnime/Zoro) use **season-relative numbering** starting from episode 1. `ani-cli-sync` resolves episode numbers using a robust, battle-tested pipeline:
 
 1. **Explicit Override Table (`_EPISODE_OFFSETS`)**: Hand-curated overrides always take priority and can specify custom search titles.
 2. **Computed PREQUEL-Chain Offsets**: Dynamically queries AniList's relation graph, traversing preceding `TV`/`ONA` seasons and summing episode counts (with cycle detection, depth limits, and ambiguity guards).
-3. **Identity Fallback**: Default 1-to-1 numbering when no override exists and the show has no preceding seasons.
+3. **Automated Two-Pass Probe & Fallback**: If an unlisted sequel is probed using a computed continuous episode number (e.g. episode 27) and the provider only hosts season-relative episodes (e.g. 1–13), `ani-cli-sync` automatically intercepts the missing stream, falls back to season-relative Episode 1, and caches offset `0` for all subsequent episodes in that season.
+4. **Identity Fallback**: Default 1-to-1 numbering when no override exists and the show has no preceding seasons.
 
 | Show / Season | AniList episodes | Scraper episodes | Offset |
 |---|---|---|---|
 | Frieren: Beyond Journey's End Season 2 | 1–10 | 29–38 | +28 |
+| Overlord III | 1–13 | 1–13 | +0 |
+| Overlord IV | 1–13 | 1–13 | +0 |
 | That Time I Got Reincarnated as a Slime Season 2 | 1–12 | 1–12 | +0 |
 | That Time I Got Reincarnated as a Slime Season 2 Part 2 | 1–12 | 1–12 | +0 |
 | That Time I Got Reincarnated as a Slime Season 3 | 1–24 | 1–24 | +0 |
 | That Time I Got Reincarnated as a Slime Season 4 | 1–24 | 1–24 | +0 |
 
 > **Adding a static override**: open `src/ani_cli_sync/cli.py` and append a tuple to `_EPISODE_OFFSETS`.
-> Standard multi-season anime are automatically handled via PREQUEL chain computation without requiring table additions.
+> Standard multi-season anime are automatically handled via PREQUEL chain computation and dynamic probe fallback without requiring manual table additions.
 
 ---
 
