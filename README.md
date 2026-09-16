@@ -22,6 +22,7 @@
 - 🔄 **Real-Time AniList Sync**: Updates episode progress and auto-transitions completed shows to `COMPLETED`.
 - 🔁 **Continuous Autoplay**: Stream multiple episodes continuously with `--autoplay` / `-a`.
 - ⏭️ **Intro Skipping**: Built-in `ani-skip` integration (can be disabled via `--no-skip`).
+- 🔞 **Uncensored / AT-X / Blu-ray Preference**: Automatically prioritizes uncensored, AT-X, or Blu-ray cuts over censored TV broadcast releases with zero-prompt menu interception (configurable via `--uncensored` / `--no-uncensored` or `ANI_CLI_SYNC_UNCENSORED`).
 - 💬 **Automated Dual-Subtitles & Fallback**: Automatically detects missing or forced-only tracks (e.g. 8-cue signs-only German tracks) and synthesizes synchronized German dialogue (bottom) and Traditional Chinese with Hanyu Pinyin (top) via local LiteLLM proxy with zero-latency disk caching.
 - 🎯 **Smart Disambiguation**: Resolves multi-season naming quirks (e.g. AniDB absolute episode offsets) and matches active watchlist entries over global searches.
 - 📥 **Netflix Import**: Easily import watch history from a `NetflixViewingHistory.csv` export.
@@ -159,7 +160,22 @@ options:
   --sub-secondary SUB_SECONDARY
                         Secondary subtitle language on demand (e.g. zh-pinyin; default: stream English or none, env: ANI_CLI_SYNC_SUB_SECONDARY)
   --no-sub-fallback     Disable automated subtitle synthesis/fallback and use native ani-cli tracks
+  --uncensored, --no-uncensored
+                        Prefer uncensored/AT-X/Blu-ray releases when available (default: true, disable with --no-uncensored, env: ANI_CLI_SYNC_UNCENSORED)
 ```
+
+---
+
+## 🔞 Uncensored / AT-X / Blu-ray Release Prioritization
+
+When scrapers (e.g. HiAnime) host multiple cuts of an anime series (e.g. censored TV broadcast vs. uncensored AT-X broadcast or Blu-ray release), standard `ani-cli` prompts interactively via `fzf` or picks the first entry (which is almost always the censored TV cut).
+
+`ani-cli-sync` transparently hooks into `ani-cli`'s menu protocol:
+1. **Automated Interception**: When `ani-cli` queries the scraper, `ani-cli-sync` passes an automated menu selector script via `ANI_CLI_MENU`.
+2. **Title Normalization & Sibling Grouping**: Normalizes anime titles (stripping season noise and brackets) and isolates sibling cuts matching the exact season/show being watched.
+3. **Keyword Matching**: Scans candidates for release tags including `uncensored`, `at-x`, `bd`, `blu-ray`, `bluray`, and `unrated`. If an uncensored release exists, it is selected automatically in **< 1ms** without blocking or waiting for user input.
+4. **Transparent Graceful Fallback**: If an anime has no uncensored release (such as standard mainstream shonen shows like *Slime* or *Frieren*), it automatically selects the canonical release without error.
+5. **Configurability**: Enabled by default; can be disabled with `--no-uncensored` or `export ANI_CLI_SYNC_UNCENSORED=0`.
 
 ---
 

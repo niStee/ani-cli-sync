@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ani_cli_sync.menu import prepare_menu_env
+
 logger = logging.getLogger(__name__)
 
 FORCED_CUE_THRESHOLD = 50
@@ -127,9 +129,13 @@ def resolve_stream_info(
     ep_no: int,
     quality: str | None = None,
     dub: bool = False,
+    uncensored: bool | None = None,
 ) -> StreamInfo | None:
     """Extract stream links, referrer, subtitles, and skip times using ani-cli debug mode."""
-    env = os.environ.copy()
+    if uncensored is None:
+        uncensored = os.environ.get("ANI_CLI_SYNC_UNCENSORED", "1").lower() in ("1", "true", "yes")
+
+    env = prepare_menu_env(target_title=search_arg, uncensored=uncensored)
     env["ANI_CLI_PLAYER"] = "debug"
     cmd = ["ani-cli", "-e", str(ep_no), search_arg]
     if dub:
@@ -447,10 +453,13 @@ def prefetch_next_episode(
     dub: bool = False,
     api_base: str = DEFAULT_API_BASE,
     model: str = DEFAULT_MODEL,
+    uncensored: bool | None = None,
 ) -> None:
     """Pre-fetch and pre-translate the next episode's subtitles in the background."""
+    if uncensored is None:
+        uncensored = os.environ.get("ANI_CLI_SYNC_UNCENSORED", "1").lower() in ("1", "true", "yes")
     try:
-        next_info = resolve_stream_info(anime_title, ep_no, quality=quality, dub=dub)
+        next_info = resolve_stream_info(anime_title, ep_no, quality=quality, dub=dub, uncensored=uncensored)
         if next_info:
             prepare_subtitles(
                 next_info,
