@@ -631,7 +631,7 @@ def cmd_watch(
 
     viewer = get_viewer(token)
     entries = get_watching_list(token, viewer["id"])
-    if not entries:
+    if not entries and not query:
         print("Your Currently Watching list on AniList is empty.")
         print("Starting ani-cli search...")
         cmd = ["ani-cli"]
@@ -671,6 +671,21 @@ def cmd_watch(
                     break
             if not selected_line:
                 lines = matched_lines
+
+    # Autoplay + no CURRENT match: fall back to a global AniList search so the
+    # caller never needs fzf (avoids 'inappropriate ioctl' when no controlling tty).
+    if not selected_line and autoplay and query:
+        media = search_anime(query)
+        if media:
+            romaji = media["title"].get("romaji") or ""
+            english = media["title"].get("english") or romaji
+            total = media["episodes"] or "?"
+            media_id = media["id"]
+            update_progress(token, media_id, 1, status="CURRENT")
+            selected_line = f"[00/{total}] {english} | {romaji} ###{media_id}###0###{total}"
+        else:
+            print(f"Anime '{query}' not found on AniList.")
+            return
 
     if not selected_line:
         try:
