@@ -5,6 +5,7 @@ permissions: read-all
 on:
   pull_request:
     branches: [main, master]
+  merge_group:
   workflow_dispatch:
 
 concurrency:

@@ -7,12 +7,42 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  merge_group:
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history so the ratchet can compare the baseline against the base ref.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+
+      - name: Install ruff
+        run: uv tool install ruff
+
+      - name: Ruff debt ratchet (gating)
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python3 scripts/ruff_count_ratchet.py \
+              --base-ref "${{ github.event.pull_request.base.sha }}"
+          else
+            python3 scripts/ruff_count_ratchet.py
+          fi
+
   test:
     runs-on: ubuntu-latest
     steps:
