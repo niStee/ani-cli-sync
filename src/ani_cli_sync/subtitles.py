@@ -495,6 +495,7 @@ def build_mpv_command(
     plan: SubtitlePlan,
     anime_title: str,
     ep_no: int,
+    sub_delay: float = 0.0,
 ) -> list[str]:
     """Assemble final MPV playback command with dual subtitles and intro/outro skips."""
     cmd = [
@@ -507,6 +508,8 @@ def build_mpv_command(
         cmd.append(f"--sid={plan.sid}")
     if plan.secondary_sid:
         cmd.append(f"--secondary-sid={plan.secondary_sid}")
+    if sub_delay:
+        cmd.append(f"--sub-delay={sub_delay}")
     if stream_info.intro_skip:
         start, end = stream_info.intro_skip
         cmd.append(f"--script-opts-append=skip-op_start={start}")
