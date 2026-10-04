@@ -614,6 +614,7 @@ def cmd_watch(
     sub_secondary: str | None = None,
     no_sub_fallback: bool = False,
     uncensored: bool = True,
+    sub_delay: float = 0.0,
 ) -> None:
     """Launch ani-cli for an anime, track watch state, and synchronize to AniList."""
     token = get_token()
@@ -772,7 +773,7 @@ def cmd_watch(
                         primary_lang=sub_primary or os.environ.get("ANI_CLI_SYNC_SUB_PRIMARY", "de"),
                         secondary_lang=sec_lang,
                     )
-                    cmd = build_mpv_command(stream_info, sub_plan, search_arg, ep_arg)
+                    cmd = build_mpv_command(stream_info, sub_plan, search_arg, ep_arg, sub_delay=sub_delay)
                     if not skip_intro:
                         cmd = [arg for arg in cmd if not arg.startswith("--script-opts-append=skip-")]
 
@@ -988,6 +989,12 @@ def main() -> None:
             default=os.environ.get("ANI_CLI_SYNC_UNCENSORED", "1").lower() in ("1", "true", "yes"),
             help="Prefer uncensored/AT-X/Blu-ray releases when available (default: true, disable with --no-uncensored)",
         )
+        p.add_argument(
+            "--sub-delay",
+            type=float,
+            default=float(os.environ.get("ANI_CLI_SYNC_SUB_DELAY", "0") or 0),
+            help="Shift subtitle timing in seconds; negative pulls subs earlier (default: 0)",
+        )
     watch_parser.add_argument("query", nargs="?", default=None, help="Optional anime title to watch directly")
 
     args_list = sys.argv[1:]
@@ -1016,9 +1023,10 @@ def main() -> None:
             sub_secondary=args.sub_secondary,
             no_sub_fallback=args.no_sub_fallback,
             uncensored=args.uncensored,
+            sub_delay=args.sub_delay,
         )
     else:
-        cmd_watch(uncensored=args.uncensored)
+        cmd_watch(uncensored=args.uncensored, sub_delay=args.sub_delay)
 
 
 if __name__ == "__main__":

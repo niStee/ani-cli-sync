@@ -206,6 +206,36 @@ class TestMPVCommandBuilder(unittest.TestCase):
         self.assertIn("--force-media-title=Slime Season 4 Episode 15", cmd)
         self.assertEqual(cmd[-1], "https://stream.example/1080/index.m3u8")
 
+    def test_build_mpv_command_omits_sub_delay_by_default(self):
+        info = StreamInfo(
+            video_link="https://stream.example/1080/index.m3u8",
+            referrer="https://zokoanime.video/",
+            subtitles=[],
+        )
+        plan = SubtitlePlan(sub_files=["/cache/de.vtt"], sid=1, secondary_sid=0)
+        cmd = build_mpv_command(info, plan, "AoT", 1)
+        self.assertFalse(any(a.startswith("--sub-delay") for a in cmd))
+
+    def test_build_mpv_command_applies_negative_sub_delay(self):
+        info = StreamInfo(
+            video_link="https://stream.example/1080/index.m3u8",
+            referrer="https://zokoanime.video/",
+            subtitles=[],
+        )
+        plan = SubtitlePlan(sub_files=["/cache/de.vtt"], sid=1, secondary_sid=0)
+        cmd = build_mpv_command(info, plan, "AoT", 1, sub_delay=-4.0)
+        self.assertIn("--sub-delay=-4.0", cmd)
+
+    def test_build_mpv_command_applies_positive_sub_delay(self):
+        info = StreamInfo(
+            video_link="https://stream.example/1080/index.m3u8",
+            referrer="https://zokoanime.video/",
+            subtitles=[],
+        )
+        plan = SubtitlePlan(sub_files=["/cache/de.vtt"], sid=1, secondary_sid=0)
+        cmd = build_mpv_command(info, plan, "AoT", 1, sub_delay=0.5)
+        self.assertIn("--sub-delay=0.5", cmd)
+
 
 class TestSubtitleTranslationAndPlanning(unittest.TestCase):
     @patch("ani_cli_sync.subtitles.urllib.request.urlopen")
