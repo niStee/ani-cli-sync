@@ -305,6 +305,66 @@ class TestCmdSetGuard(unittest.TestCase):
         mock_update.assert_called_once_with("tok", 182255, 10, status="COMPLETED")
 
 
+class TestWatchQueryFallback(unittest.TestCase):
+    """When --autoplay is given a query that isn't in CURRENT, fall back to global
+    AniList search instead of dying on a non-tty fzf spawn (regression: 'inappropriate
+    ioctl for device' when launched without a controlling terminal)."""
+
+    def setUp(self):
+        import warnings
+        self._warn_ctx = warnings.catch_warnings()
+        self._warn_ctx.__enter__()
+        warnings.simplefilter("ignore", ResourceWarning)
+
+    def tearDown(self):
+        self._warn_ctx.__exit__(None, None, None)
+
+    def _make_media(self, mid, romaji, english, episodes):
+        return {
+            "id": mid,
+            "title": {"romaji": romaji, "english": english},
+            "episodes": episodes,
+        }
+
+    def test_autoplay_query_not_in_watching_falls_back_to_global_search(self):
+        import ani_cli_sync.cli as cli_module
+
+        aot = self._make_media(16498, "Shingeki no Kyojin", "Attack on Titan", 25)
+
+        with (
+            unittest.mock.patch.object(cli_module, "get_token", return_value="tok"),
+            unittest.mock.patch.object(cli_module, "get_viewer", return_value={"id": 1, "name": "u"}),
+            unittest.mock.patch.object(cli_module, "get_watching_list", return_value=[]),
+            unittest.mock.patch.object(cli_module, "search_anime", return_value=aot) as mock_search,
+            unittest.mock.patch.object(cli_module, "update_progress") as mock_update,
+            unittest.mock.patch.object(cli_module, "subprocess") as mock_sub,
+            unittest.mock.patch("sys.stdout"),
+        ):
+            cli_module.cmd_watch(query="Attack on Titan", autoplay=True, quality=None, dub=False)
+
+        mock_search.assert_called_once_with("Attack on Titan")
+        mock_update.assert_called_once_with("tok", 16498, 1, status="CURRENT")
+        self.assertTrue(mock_sub.Popen.called or mock_sub.run.called)
+
+    def test_autoplay_query_no_global_match_exits_cleanly_without_fzf(self):
+        import ani_cli_sync.cli as cli_module
+
+        with (
+            unittest.mock.patch.object(cli_module, "get_token", return_value="tok"),
+            unittest.mock.patch.object(cli_module, "get_viewer", return_value={"id": 1, "name": "u"}),
+            unittest.mock.patch.object(cli_module, "get_watching_list", return_value=[]),
+            unittest.mock.patch.object(cli_module, "search_anime", return_value=None),
+            unittest.mock.patch.object(cli_module, "update_progress") as mock_update,
+            unittest.mock.patch.object(cli_module, "subprocess") as mock_sub,
+            unittest.mock.patch("sys.stdout"),
+        ):
+            cli_module.cmd_watch(query="Nonexistent Anime XYZ", autoplay=True, quality=None, dub=False)
+
+        mock_update.assert_not_called()
+        mock_sub.Popen.assert_not_called()
+        mock_sub.run.assert_not_called()
+
+
 class TestComputePrequelOffset(unittest.TestCase):
     """Unit tests for compute_prequel_offset PREQUEL chain traversal."""
 

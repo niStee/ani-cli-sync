@@ -238,6 +238,43 @@ class TestMPVCommandBuilder(unittest.TestCase):
 
 
 class TestSubtitleTranslationAndPlanning(unittest.TestCase):
+    def test_prepare_subtitles_does_not_treat_uniform_lang_as_english(self):
+        """The provider stamps lang="en" on every track, so lang must not decide which
+        track is English. Selecting by lang alone picks the first track in the payload,
+        which on some releases is Arabic."""
+        tracks = [
+            {"lang": "en", "label": "Arabic", "src": "https://s/arabic.vtt"},
+            {"lang": "en", "label": "English", "src": "https://s/english.vtt"},
+            {"lang": "en", "label": "German (- Deutsch)", "src": "https://s/german.vtt"},
+        ]
+        info = StreamInfo(
+            video_link="https://s/1080/index.m3u8",
+            referrer="https://zokoanime.video/",
+            subtitles=tracks,
+        )
+
+        arabic_vtt = "WEBVTT\n\n00:00.460 --> 00:01.880\nARABIC-LINE\n"
+        english_vtt = "WEBVTT\n\n00:00.460 --> 00:01.880\nENGLISH-LINE\n"
+
+        def fake_fetch(url, timeout=30):
+            if url.endswith("arabic.vtt"):
+                return arabic_vtt
+            if url.endswith("english.vtt"):
+                return english_vtt
+            return SAMPLE_FORCED_VTT  # German is sign-only, so it is not used as primary
+
+        with (
+            tempfile.TemporaryDirectory() as td,
+            patch("ani_cli_sync.subtitles.fetch_vtt_text", side_effect=fake_fetch),
+            patch("ani_cli_sync.subtitles.translate_cues_llm", return_value=None) as mock_translate,
+        ):
+            prepare_subtitles(info, "JJK", 1, primary_lang="de", cache_dir=Path(td))
+
+        if mock_translate.called:
+            base_cues = mock_translate.call_args[0][0]
+            text = " ".join(line for cue in base_cues for line in cue.lines)
+            self.assertNotIn("ARABIC-LINE", text)
+
     @patch("ani_cli_sync.subtitles.urllib.request.urlopen")
     def test_translate_cues_llm_german(self, mock_urlopen):
         resp_json = {

@@ -376,19 +376,34 @@ def prepare_subtitles(
         str(secondary_cache_path) if (secondary_cache_path and secondary_cache_path.is_file()) else None
     )
 
-    # Identify candidate tracks on the stream
+    # Identify candidate tracks on the stream.
+    # The provider currently stamps lang="en" on every track regardless of its real
+    # language, so `lang` must never decide on its own: matching it alone binds the
+    # first track in the payload, which on some releases is Arabic. Prefer `label`
+    # (which is accurate) and consult `lang` only for tracks with no usable label.
     stream_de_url = None
     stream_en_url = None
     for sub in stream_info.subtitles:
-        lang = (sub.get("lang") or "").lower()
         label = (sub.get("label") or "").lower()
         src = sub.get("src")
         if not src:
             continue
-        if ("de" in lang or "german" in label) and not stream_de_url:
+        if not stream_de_url and ("german" in label or "deutsch" in label):
             stream_de_url = src
-        if ("en" in lang or "english" in label) and not stream_en_url:
+        if not stream_en_url and "english" in label:
             stream_en_url = src
+
+    # Fall back to `lang` only for tracks whose label carries no language name.
+    if not stream_de_url:
+        for sub in stream_info.subtitles:
+            if (sub.get("lang") or "").lower() == "de" and sub.get("src"):
+                stream_de_url = sub["src"]
+                break
+    if not stream_en_url:
+        for sub in stream_info.subtitles:
+            if (sub.get("lang") or "").lower() == "en" and sub.get("src"):
+                stream_en_url = sub["src"]
+                break
 
     # Check if stream primary is full dialogue or forced signs
     if not primary_file and stream_de_url:
