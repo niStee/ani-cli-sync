@@ -10,7 +10,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from ruff_count_ratchet import (  # noqa: E402
+from ruff_count_ratchet import (
     EXIT_CONFIG,
     EXIT_EXTERNAL,
     EXIT_OK,
