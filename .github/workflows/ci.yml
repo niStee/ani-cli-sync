@@ -32,7 +32,10 @@ jobs:
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
 
       - name: Install ruff
-        run: uv tool install ruff
+        # Pinned: the ratchet compares a violation COUNT against a committed baseline,
+        # so the metric is only stable while the analyser is stable. A ruff release
+        # that adds rules would otherwise fail the gate on an unchanged PR.
+        run: uv tool install ruff==0.16.10
 
       - name: Ruff debt ratchet (gating)
         run: |
