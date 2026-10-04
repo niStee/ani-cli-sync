@@ -1008,7 +1008,11 @@ def main() -> None:
             "--sub-delay",
             type=float,
             default=float(os.environ.get("ANI_CLI_SYNC_SUB_DELAY", "0") or 0),
-            help="Shift subtitle timing in seconds; negative pulls subs earlier (default: 0)",
+            help=(
+                "Shift subtitle timing in seconds; negative pulls subs earlier (default: 0). "
+                "Measure per episode: whether subs are dub-timed varies episode to episode "
+                "within one release, so a value tuned on one episode can mis-time the next."
+            ),
         )
     watch_parser.add_argument("query", nargs="?", default=None, help="Optional anime title to watch directly")
 
