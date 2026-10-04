@@ -66,7 +66,43 @@ ani-cli-sync list       # List currently watching
 ani-cli-sync set <title> <ep>  # Update progress (AniList ep, NOT scraper ep)
 ani-cli-sync login      # OAuth setup
 ani-cli-sync -a         # Watch with autoplay
+ani-cli-sync watch --sub-delay=-3.8 "Attack on Titan"  # Shift subs for JP-audio + dub-timed subs
 ```
+
+## Subtitle Sync Offset (`--sub-delay`)
+
+Some releases ship **English subtitles timed to the English dub** while the audio track is
+**Japanese original**. The two differ by a constant, so the subs read as drifting even though
+mpv reports `A-V: 0.000` (mpv only tracks demuxer PTS, not dialogue alignment).
+
+`--sub-delay=<seconds>` shifts subtitle presentation. **Negative pulls subs earlier.**
+
+| Release | Audio | Sub track timing | Value |
+|---|---|---|---|
+| Attack on Titan S1 | Japanese | English dub | `-3.8` |
+
+Defaults to `0` (no flag emitted). Override globally with `ANI_CLI_SYNC_SUB_DELAY=-3.8`.
+Prefer a per-release flag over a global default: dub offsets are a property of the
+release, so a global value actively mis-times correctly-synced shows.
+
+**Verify before choosing a value.** Compare the first cue of each candidate track against
+the first spoken line; if every English track shares one first-cue timestamp, they are all
+dub-timed and there is no better track to switch to:
+
+```bash
+python3 -c "
+import sys; sys.path.insert(0,'src')
+from ani_cli_sync.subtitles import resolve_stream_info
+info = resolve_stream_info('Shingeki no Kyojin', 1)
+for s in info.subtitles: print(s['label'], s['src'])
+"
+```
+
+Note the scraper mislabels `lang` (Portuguese and Spanish tracks report `lang: 'en'`),
+so select tracks by `label`, never by `lang` alone. There is frequently no Japanese
+subtitle track to borrow timings from.
+
+Fine-tune live in mpv with `z` / `Z` (-0.1s / -1s) and `x` / `X` (+0.1s / +1s).
 
 ## Troubleshooting: Stuck AniList State
 
