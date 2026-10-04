@@ -46,11 +46,16 @@ tracks each season starting from episode 1. `resolve_episode_offset()` resolves 
 ## Commands & Testing
 
 ```bash
-# Run unit test suite (16 tests)
+# Run unit test suite
 PYTHONPATH=src python3 -m unittest discover -s tests
 
 # Lint
 ruff check src/ tests/
+
+# Lint debt ratchet (what CI gates on)
+python3 scripts/ruff_count_ratchet.py
+python3 scripts/ruff_count_ratchet.py --update          # lower the baseline after a cleanup
+python3 scripts/ruff_count_ratchet.py --base-ref <sha>  # fail if the PR raised the allowance
 
 # Install locally as editable package
 pip install -e .
@@ -133,3 +138,52 @@ re-open it as `CURRENT` as long as `ep < total`.
 ## Auto-merge policy
 
 Auto-merge policy: see ai-infra `docs/AUTOMERGE.md` (<https://github.com/niStee/ai-infra/blob/main/docs/AUTOMERGE.md>); agents arm auto-merge only per its Tier-1 preconditions.
+
+## CI Gates
+
+| Gate | Required check | Enforces |
+|---|---|---|
+| `lint` job in `ci.yml` | `lint` (after it is added to required contexts) | ruff violation count equals `scripts/ruff_count_baseline.txt` |
+| `test` / `matrix-test` | `test`, `matrix-test (3.10-3.13)` | unit suite on Python 3.10-3.13 |
+| `scorecard`, `semgrep`, `gitleaks` | `Scorecard Security Analysis`, `scan` | supply-chain, SAST, secret scan |
+
+### Ruff ratchet
+
+`scripts/ruff_count_ratchet.py` gates on a **count**, not on ruff's exit code. The rules
+that matter:
+
+- The count must **equal** the baseline, not merely be below it. Failing only on an
+  increase lets an unrecorded decrease leave slack that absorbs a later regression.
+- The baseline may only fall, via `--update`. `--base-ref` fails a PR that widens the
+  allowance in the same commit that adds the findings.
+- Scope is **git-tracked** files (`git ls-files`), never a directory walk. A walk also
+  visits untracked scratch, nested worktrees and vendored caches, reporting phantom
+  regressions that do not exist in CI.
+- Exit codes are distinct and never collapsed: `0` ok, `1` regression, `2` config error,
+  `3` external failure (ruff could not run). A ratchet that fails open is worse than none.
+
+Lower the baseline deliberately as findings are fixed:
+
+```bash
+python3 scripts/ruff_count_ratchet.py --update
+```
+
+### The local pre-commit hook is not this gate
+
+The global git hook (ai-infra managed, `core.hooksPath`) runs `ruff check --quiet .`. Two
+differences from the CI ratchet, both of which make it weaker:
+
+- It is a **directory walk**, so untracked scratch and nested worktrees inflate it.
+- It is guarded by `command -v ruff`, so with ruff absent it **silently passes**.
+
+CI is the only enforced lint signal in this repository.
+
+### Merge queue
+
+`ci.yml`, `scorecard.yml`, `semgrep.yml` and `gitleaks.yml` all carry a `merge_group`
+trigger. Without it, a merge queue forms, waits for a required check that never reports,
+and holds the PR -- the single most common merge-queue failure.
+
+Required-check names are matched by plain string, so renaming a job in a workflow while
+the ruleset still points at the old name stalls the queue with no error. Keep the job
+names `test`, `matrix-test`, `lint`, `Scorecard Security Analysis`, `scan` stable.
