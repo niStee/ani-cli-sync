@@ -66,28 +66,60 @@ ani-cli-sync list       # List currently watching
 ani-cli-sync set <title> <ep>  # Update progress (AniList ep, NOT scraper ep)
 ani-cli-sync login      # OAuth setup
 ani-cli-sync -a         # Watch with autoplay
-ani-cli-sync watch --sub-delay=-3.8 "Attack on Titan"  # Shift subs for JP-audio + dub-timed subs
+ani-cli-sync watch --sub-delay=-3.8 "Attack on Titan"  # Per-episode, measured per release (see below)
 ```
 
 ## Subtitle Sync Offset (`--sub-delay`)
 
 Some releases ship **English subtitles timed to the English dub** while the audio track is
-**Japanese original**. The two differ by a constant, so the subs read as drifting even though
-mpv reports `A-V: 0.000` (mpv only tracks demuxer PTS, not dialogue alignment).
+**Japanese original**. The subs then read as drifting even though mpv reports `A-V: 0.000`
+(mpv only tracks demuxer PTS, not dialogue alignment).
 
 `--sub-delay=<seconds>` shifts subtitle presentation. **Negative pulls subs earlier.**
 
-| Release | Audio | Sub track timing | Value |
+Defaults to `0` (no flag emitted). Override with `ANI_CLI_SYNC_SUB_DELAY`.
+
+### The offset is per-episode, not per-show
+
+Measured on Attack on Titan S1, same release, same provider:
+
+| Episode | First sub cue | JP audio onset | Offset |
 |---|---|---|---|
-| Attack on Titan S1 | Japanese | English dub | `-3.8` |
+| Ep 1 | `00:00:41.870` | ~38s | `-3.8` |
+| Ep 2 | `00:00:21.540` | ~22s | `~0` |
 
-Defaults to `0` (no flag emitted). Override globally with `ANI_CLI_SYNC_SUB_DELAY=-3.8`.
-Prefer a per-release flag over a global default: dub offsets are a property of the
-release, so a global value actively mis-times correctly-synced shows.
+**Do not carry an offset across episodes, and never treat it as a property of the series.**
+Ep 1's subtitle file is dub-timed; ep 2's is already aligned to the Japanese audio. A flag
+tuned on one episode actively mis-times the next -- `-3.8` on ep 2 pushed the first line to
+`17.7s`, roughly 4s ahead of the dialogue.
 
-**Verify before choosing a value.** Compare the first cue of each candidate track against
-the first spoken line; if every English track shares one first-cue timestamp, they are all
-dub-timed and there is no better track to switch to:
+A per-show default is therefore actively harmful, including via `ANI_CLI_SYNC_SUB_DELAY`.
+Determine the value per episode.
+
+### Measuring the offset
+
+Cheapest reliable method: compare the **first subtitle cue** against the **first audible
+Japanese line**. The cue timestamp is exact and needs no tooling:
+
+```bash
+python3 -c "
+import sys; sys.path.insert(0,'src')
+from ani_cli_sync.subtitles import resolve_stream_info
+i = resolve_stream_info('Shingeki no Kyojin', 2)
+print(i.subtitles[0]['src'])
+" # then curl it with -e 'https://zokoanime.video/' and read the first cue
+```
+
+`offset = first_cue - audio_onset`, so a negative result means the subs are late and must be
+pulled earlier. Fine-tune in mpv with `z` / `Z` (-0.1s / -1s) and `x` / `X` (+0.1s / +1s).
+
+Automating the audio side is not currently practical: the HLS segments are served with a
+`.ts.jpg` extension that ffmpeg rejects (`not in allowed_segment_extensions`), so
+`silencedetect` cannot read the stream without a workaround.
+
+**Verify before choosing a value.** Compare the first cue of each candidate track; if every
+English track shares one first-cue timestamp they are all cut to the same timing, and there
+is no better track to switch to:
 
 ```bash
 python3 -c "
