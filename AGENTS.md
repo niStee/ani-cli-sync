@@ -81,12 +81,15 @@ Defaults to `0` (no flag emitted). Override with `ANI_CLI_SYNC_SUB_DELAY`.
 
 ### The offset is per-episode, not per-show
 
-Measured on Attack on Titan S1, same release, same provider:
+Measured and playback-verified on Attack on Titan S1, same release, same provider:
 
-| Episode | First sub cue | JP audio onset | Offset |
-|---|---|---|---|
-| Ep 1 | `00:00:41.870` | ~38s | `-3.8` |
-| Ep 2 | `00:00:21.540` | ~22s | `~0` |
+| Episode | First sub cue | JP audio onset | Offset | Verified |
+|---|---|---|---|---|
+| Ep 1 | `00:00:41.870` | ~38s | `-3.8` | yes |
+| Ep 2 | `00:00:21.540` | ~22s | `0` (no flag) | yes |
+
+Ep 2's own subtitle file is already aligned to the Japanese audio, so it needs no shift at
+all. Do not assume a show that needed a shift on one episode needs it on the next.
 
 **Do not carry an offset across episodes, and never treat it as a property of the series.**
 Ep 1's subtitle file is dub-timed; ep 2's is already aligned to the Japanese audio. A flag
