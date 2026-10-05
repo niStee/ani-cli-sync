@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from ani_cli_sync.subtitles import (
+    DEFAULT_MODEL,
     StreamInfo,
     SubtitlePlan,
     VTTCue,
+    _translate_single_batch,
     build_mpv_command,
     count_vtt_cues,
     fetch_vtt_text,
@@ -256,7 +259,7 @@ class TestSubtitleTranslationAndPlanning(unittest.TestCase):
         arabic_vtt = "WEBVTT\n\n00:00.460 --> 00:01.880\nARABIC-LINE\n"
         english_vtt = "WEBVTT\n\n00:00.460 --> 00:01.880\nENGLISH-LINE\n"
 
-        def fake_fetch(url, timeout=30):
+        def fake_fetch(url, timeout=30, referrer=None):
             if url.endswith("arabic.vtt"):
                 return arabic_vtt
             if url.endswith("english.vtt"):
@@ -413,6 +416,170 @@ class TestSubtitleTranslationAndPlanning(unittest.TestCase):
         mock_prepare.assert_called_once()
         self.assertEqual(mock_prepare.call_args[1]["primary_lang"], "de")
         self.assertIsNone(mock_prepare.call_args[1]["secondary_lang"])
+
+
+class TestTranslationDefaults(unittest.TestCase):
+    """The translation defaults are measured facts, not preferences.
+
+    Measured 2026-10-05 against the local LiteLLM proxy, one real 50-cue AoT S1 ep6
+    batch through the shipped code path: minimax-m3 17.5s, gemini-3.1-flash-lite 5.5s,
+    minimax-m2.7-highspeed 29.9s, minimax-m2.7 31.8s, deepseek-v4-flash 139.4s.
+    gemini-3.6-flash answers HTTP 400 and is not a candidate.
+
+    deepseek-v4-flash is a reasoning model: it burns reasoning tokens before any
+    content, so a 50-cue batch does not finish inside the socket timeout. That is why
+    a single episode stalled for the full 180s retry budget and still returned the
+    English track.
+    """
+
+    def test_default_model_is_a_non_reasoning_model(self):
+        self.assertEqual(DEFAULT_MODEL, "minimax-m3")
+
+    def test_default_model_is_overridable_by_env(self):
+        import importlib
+
+        import ani_cli_sync.subtitles as subtitles_module
+
+        with patch.dict(os.environ, {"ANI_CLI_SYNC_LLM_MODEL": "some-other-model"}):
+            reloaded = importlib.reload(subtitles_module)
+            try:
+                self.assertEqual(reloaded.DEFAULT_MODEL, "some-other-model")
+            finally:
+                patch.dict(os.environ)
+                importlib.reload(subtitles_module)  # restore for other tests
+
+    def test_batch_timeout_is_bounded(self):
+        # 45s is ~2.5x the measured healthy batch (17.5s) while capping a stalled
+        # batch well below the old 90s, which is what let one episode hang for 180s.
+        import inspect
+
+        params = inspect.signature(_translate_single_batch).parameters
+        self.assertEqual(params["timeout"].default, 45)
+
+    def test_client_retries_do_not_multiply_the_proxy_retries(self):
+        # LiteLLM already retries internally (num_retries: 3). A client-side second
+        # attempt doubled the wall time for no benefit.
+        import inspect
+
+        params = inspect.signature(_translate_single_batch).parameters
+        self.assertEqual(params["retries"].default, 1)
+
+
+class TestTranslateAbortsWithoutWaitingForStragglers(unittest.TestCase):
+    """A failed batch must return promptly, not after every sibling finishes.
+
+    translate_cues_llm returns None on the first failed batch, but it does so from
+    inside the `with ThreadPoolExecutor` block, so __exit__ shut the executor down
+    with wait=True and blocked until every in-flight batch had burned its full
+    timeout x retries budget. With cancel_futures the abort is immediate.
+    """
+
+    def test_returns_before_slow_siblings_finish(self):
+        import threading
+        import time
+
+        import ani_cli_sync.subtitles as subtitles_module
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def fake_single_batch(batch_idx, batch, endpoint, model, sys_prompt, timeout=90, retries=2):
+            if batch_idx == 0:
+                started.set()
+                return batch_idx, None  # immediate failure
+            started.set()
+            release.wait(30)  # a sibling that would otherwise stall the caller
+            return batch_idx, batch
+
+        cues = parse_vtt(SAMPLE_VTT) * 20  # 60 cues -> 2 batches, so a sibling exists
+        with patch.object(subtitles_module, "_translate_single_batch", side_effect=fake_single_batch):
+            t0 = time.time()
+            try:
+                result = subtitles_module.translate_cues_llm(cues, "de")
+            finally:
+                release.set()  # never leave the sibling thread blocked
+        elapsed = time.time() - t0
+        self.assertIsNone(result)
+        self.assertLess(elapsed, 10.0, f"abort waited {elapsed:.1f}s for in-flight batches")
+
+    def test_all_batches_ok_still_returns_translations(self):
+        import ani_cli_sync.subtitles as subtitles_module
+
+        def fake_single_batch(batch_idx, batch, endpoint, model, sys_prompt, timeout=90, retries=2):
+            return batch_idx, [c for c in batch]
+
+        cues = parse_vtt(SAMPLE_VTT) * 20
+        with patch.object(subtitles_module, "_translate_single_batch", side_effect=fake_single_batch):
+            result = subtitles_module.translate_cues_llm(cues, "de")
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), len(cues))
+
+
+class TestFetchVttHeaders(unittest.TestCase):
+    """The subtitle CDN 403s a fetch that omits the stream's Referer.
+
+    Verified live against hls.dramahot.top with a freshly resolved stream: identical URL,
+    HTTP 403 with only a User-Agent, HTTP 200 with the stream's Referer. mpv already sends
+    it via --referrer, which is why subtitles play but never reached the cache.
+    """
+
+    URL = "https://hls.example/v/abc/subs/en.vtt"
+    REFERRER = "https://zokoanime.video/"
+
+    def _capture(self):
+        captured: dict = {}
+
+        class _Resp:
+            def read(self, *_a):
+                return SAMPLE_VTT.encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_a):
+                return False
+
+        def fake_urlopen(req, timeout=None):
+            captured["headers"] = {k.lower(): v for k, v in req.header_items()}
+            return _Resp()
+
+        patcher = patch("urllib.request.urlopen", side_effect=fake_urlopen)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return captured
+
+    def test_sends_referer_when_given(self):
+        captured = self._capture()
+        self.assertIn("WEBVTT", fetch_vtt_text(self.URL, referrer=self.REFERRER))
+        self.assertEqual(captured["headers"].get("referer"), self.REFERRER)
+
+    def test_no_referrer_still_fetches(self):
+        # Providers that do not gate on Referer, and existing callers, keep working.
+        captured = self._capture()
+        self.assertIn("WEBVTT", fetch_vtt_text(self.URL))
+        self.assertNotIn("referer", captured["headers"])
+
+    def test_user_agent_is_always_sent(self):
+        captured = self._capture()
+        fetch_vtt_text(self.URL, referrer=self.REFERRER)
+        self.assertIn("ani-cli-sync", captured["headers"].get("user-agent", ""))
+
+    def test_prepare_subtitles_forwards_the_stream_referrer(self):
+        captured = self._capture()
+        info = StreamInfo(
+            video_link="https://hls.example/1080/index.m3u8",
+            referrer=self.REFERRER,
+            subtitles=[{"lang": "en", "label": "English", "src": self.URL}],
+        )
+        with (
+            tempfile.TemporaryDirectory() as td,
+            patch("ani_cli_sync.subtitles.translate_cues_llm", return_value=None),
+        ):
+            plan = prepare_subtitles(info, "aot", 6, primary_lang="de", cache_dir=Path(td))
+        self.assertEqual(captured["headers"].get("referer"), self.REFERRER)
+        # German track absent -> base English fetched (and translation stubbed out below is
+        # not needed: without a translator the plan falls back to the English URL).
+        self.assertTrue(plan.sub_files)
 
 
 class TestFetchVttSecurity(unittest.TestCase):

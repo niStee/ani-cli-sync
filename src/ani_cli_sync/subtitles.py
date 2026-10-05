@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 FORCED_CUE_THRESHOLD = 50
 DEFAULT_API_BASE = os.environ.get("LITELLM_API_BASE", "http://localhost:4000/v1")
-DEFAULT_MODEL = os.environ.get("ANI_CLI_SYNC_LLM_MODEL", "deepseek-v4-flash")
+DEFAULT_MODEL = os.environ.get("ANI_CLI_SYNC_LLM_MODEL", "minimax-m3")
 
 
 @dataclass
@@ -209,16 +209,22 @@ def resolve_stream_info(
         return None
 
 
-def fetch_vtt_text(url: str, timeout: int = 30) -> str:
-    """Download VTT subtitle text from a URL."""
+def fetch_vtt_text(url: str, timeout: int = 30, referrer: str | None = None) -> str:
+    """Download VTT subtitle text from a URL.
+
+    ``referrer`` is required in practice for CDN-hosted tracks: hls.dramahot.top answers
+    HTTP 403 to a subtitle URL carrying only a User-Agent and 200 once the stream's Referer
+    is present. mpv already receives it via --referrer, so playback shows subtitles that this
+    function could not fetch, and the translation pipeline silently produced nothing.
+    """
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise ValueError(f"Unsupported or insecure URL: {url}")
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ani-cli-sync/1.0"}
+    if referrer:
+        headers["Referer"] = referrer
     # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ani-cli-sync/1.0"},
-    )
+    req = urllib.request.Request(url, headers=headers)
     # nosec B310
     # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 # nosemgrep
@@ -231,8 +237,8 @@ def _translate_single_batch(
     endpoint: str,
     model: str,
     sys_prompt: str,
-    timeout: int = 90,
-    retries: int = 2,
+    timeout: int = 45,
+    retries: int = 1,
 ) -> tuple[int, list[VTTCue] | None]:
     """Translate an individual batch of cues with retries."""
     parsed_ep = urllib.parse.urlsplit(endpoint)
@@ -319,17 +325,29 @@ def translate_cues_llm(
     batches = [cues[i : i + batch_size] for i in range(0, len(cues), batch_size)]
     results: list[list[VTTCue] | None] = [None] * len(batches)
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [
-            executor.submit(_translate_single_batch, idx, b, endpoint, model, sys_prompt)
-            for idx, b in enumerate(batches)
-        ]
+    # Not a `with` block on purpose: returning from inside one waits for every
+    # in-flight future at __exit__ (shutdown(wait=True)), which is how a known
+    # failure used to cost the full timeout x retries of the slowest sibling.
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    futures = [
+        executor.submit(_translate_single_batch, idx, b, endpoint, model, sys_prompt)
+        for idx, b in enumerate(batches)
+    ]
+    failed = False
+    try:
         for future in as_completed(futures):
             b_idx, b_cues = future.result()
             if b_cues is None:
                 logger.warning("Translation failed on batch %d", b_idx)
-                return None
+                failed = True
+                break
             results[b_idx] = b_cues
+    finally:
+        # On abort: drop queued batches and stop waiting. Siblings already running
+        # finish on their own, bounded by the per-batch timeout.
+        executor.shutdown(wait=not failed, cancel_futures=failed)
+    if failed:
+        return None
 
     all_cues: list[VTTCue] = []
     for r in results:
@@ -408,7 +426,7 @@ def prepare_subtitles(
     # Check if stream primary is full dialogue or forced signs
     if not primary_file and stream_de_url:
         try:
-            de_content = fetch_vtt_text(stream_de_url)
+            de_content = fetch_vtt_text(stream_de_url, referrer=stream_info.referrer)
             if not is_forced_track(de_content):
                 primary_cache_path.write_text(de_content, encoding="utf-8")
                 primary_file = str(primary_cache_path)
@@ -421,7 +439,7 @@ def prepare_subtitles(
 
     if (needs_primary_translation or needs_secondary_translation) and stream_en_url:
         try:
-            base_content = fetch_vtt_text(stream_en_url)
+            base_content = fetch_vtt_text(stream_en_url, referrer=stream_info.referrer)
             base_cues = parse_vtt(base_content)
 
             if needs_primary_translation:

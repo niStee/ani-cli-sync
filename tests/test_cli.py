@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import urllib.error
 import unittest.mock
 from ani_cli_sync.cli import (
     compute_prequel_offset,
@@ -339,6 +340,15 @@ class TestWatchQueryFallback(unittest.TestCase):
             unittest.mock.patch.object(cli_module, "update_progress") as mock_update,
             unittest.mock.patch.object(cli_module, "subprocess") as mock_sub,
             unittest.mock.patch("sys.stdout"),
+            # resolve_stream_info runs the real `ani-cli debug`, so this test reaches the
+            # subtitle pipeline and used to depend on the CDN rejecting the fetch. With the
+            # Referer fix the fetch succeeds and the run continued into real LLM
+            # translation, hanging the suite. Emulate the old outcome without a network.
+            unittest.mock.patch(
+                "ani_cli_sync.subtitles.fetch_vtt_text",
+                side_effect=urllib.error.URLError("network disabled in unit test"),
+            ),
+            unittest.mock.patch("ani_cli_sync.subtitles.translate_cues_llm", return_value=None),
         ):
             cli_module.cmd_watch(query="Attack on Titan", autoplay=True, quality=None, dub=False)
 
