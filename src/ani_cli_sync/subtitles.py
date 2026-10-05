@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 FORCED_CUE_THRESHOLD = 50
 DEFAULT_API_BASE = os.environ.get("LITELLM_API_BASE", "http://localhost:4000/v1")
-DEFAULT_MODEL = os.environ.get("ANI_CLI_SYNC_LLM_MODEL", "deepseek-v4-flash")
+DEFAULT_MODEL = os.environ.get("ANI_CLI_SYNC_LLM_MODEL", "minimax-m3")
 
 
 @dataclass
@@ -237,8 +237,8 @@ def _translate_single_batch(
     endpoint: str,
     model: str,
     sys_prompt: str,
-    timeout: int = 90,
-    retries: int = 2,
+    timeout: int = 45,
+    retries: int = 1,
 ) -> tuple[int, list[VTTCue] | None]:
     """Translate an individual batch of cues with retries."""
     parsed_ep = urllib.parse.urlsplit(endpoint)
@@ -325,17 +325,29 @@ def translate_cues_llm(
     batches = [cues[i : i + batch_size] for i in range(0, len(cues), batch_size)]
     results: list[list[VTTCue] | None] = [None] * len(batches)
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [
-            executor.submit(_translate_single_batch, idx, b, endpoint, model, sys_prompt)
-            for idx, b in enumerate(batches)
-        ]
+    # Not a `with` block on purpose: returning from inside one waits for every
+    # in-flight future at __exit__ (shutdown(wait=True)), which is how a known
+    # failure used to cost the full timeout x retries of the slowest sibling.
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    futures = [
+        executor.submit(_translate_single_batch, idx, b, endpoint, model, sys_prompt)
+        for idx, b in enumerate(batches)
+    ]
+    failed = False
+    try:
         for future in as_completed(futures):
             b_idx, b_cues = future.result()
             if b_cues is None:
                 logger.warning("Translation failed on batch %d", b_idx)
-                return None
+                failed = True
+                break
             results[b_idx] = b_cues
+    finally:
+        # On abort: drop queued batches and stop waiting. Siblings already running
+        # finish on their own, bounded by the per-batch timeout.
+        executor.shutdown(wait=not failed, cancel_futures=failed)
+    if failed:
+        return None
 
     all_cues: list[VTTCue] = []
     for r in results:
