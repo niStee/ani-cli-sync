@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -16,12 +16,26 @@ INFO = StreamInfo(video_link="https://hls.example/1080/index.m3u8", referrer="ht
 PLAN = SubtitlePlan(sub_files=["/cache/de.vtt"], sid=1, secondary_sid=0)
 NO_PLAN = SubtitlePlan(sub_files=[], sid=1, secondary_sid=0)
 
+# progress 1 of 3 -> plays ep2, then autoplays ep3, which completes and ends the run.
+TWO_EPISODE_ENTRY = {
+    "id": 1,
+    "mediaId": 100,
+    "progress": 1,
+    "media": {"id": 100, "title": {"english": "Show Season 1", "romaji": "Show S1"}, "episodes": 3},
+}
 
-def _result(offset: float, confident: bool = True, reason: str = "") -> OffsetResult:
+
+def _result(
+    offset: float,
+    confident: bool = True,
+    reason: str = "",
+    onset: float = 38.5,
+    first_cue: float = 41.87,
+) -> OffsetResult:
     return OffsetResult(
         offset=offset,
-        onset=38.5,
-        first_cue=41.87,
+        onset=onset,
+        first_cue=first_cue,
         confident=confident,
         reason=reason,
     )
@@ -132,6 +146,73 @@ class TestSubSyncCliSurface(unittest.TestCase):
         self.assertEqual(captured["sub_delay"], -1.5)
         self.assertEqual(captured["sub_sync"], "auto")
 
+
+class TestPerEpisodeMeasurement(unittest.TestCase):
+    """--sub-sync=auto must measure every episode, never reuse the previous result.
+
+    The offset is a property of one subtitle file, never of the invocation: Attack on
+    Titan ep1 needs -3.37 while ep2 needs +0.25. Feeding ep1's value into ep2 mis-times
+    the dialogue by seconds, which is worse than applying no shift at all.
+    """
+
+    INFO = StreamInfo(video_link="https://hls.example/1080/index.m3u8", referrer="https://zokoanime.video/")
+    PLAN = SubtitlePlan(sub_files=["/cache/de.vtt"], sid=1, secondary_sid=0)
+
+    def _drive(self, returncode: int = 0, measurements: tuple = ()):
+        """Run cmd_watch over two episodes on the subtitles path. Returns the mocks."""
+        import ani_cli_sync.cli as cli_module
+
+        cli_module._PREQUEL_OFFSET_CACHE.clear()
+
+        def mock_gql(query, variables=None, token=None, retries=3):
+            if "relations" in query:
+                # Empty edges: find_sequel returns nothing and the run ends after ep3.
+                return {"data": {"Media": {"relations": {"edges": []}}}}
+            if "MediaList" in query:
+                raise RuntimeError("Not Found.")
+            return {}
+
+        build_mpv = MagicMock(return_value=["mpv"])
+        measure = MagicMock(side_effect=list(measurements))
+        probe = MagicMock(return_value=None)
+        update = MagicMock()
+
+        with (
+            patch.object(cli_module, "get_token", return_value="tok"),
+            patch.object(cli_module, "get_viewer", return_value={"id": 42, "name": "nils"}),
+            patch.object(cli_module, "get_watching_list", return_value=[TWO_EPISODE_ENTRY]),
+            patch.object(cli_module, "gql_query", side_effect=mock_gql),
+            patch.object(cli_module, "update_progress", update),
+            patch.object(
+                cli_module.subprocess,
+                "run",
+                MagicMock(return_value=MagicMock(returncode=returncode)),
+            ),
+            # Two (start, end) pairs: each episode reports 1450s of playback, above the
+            # unknown-duration fallback threshold.
+            patch.object(cli_module.time, "time", side_effect=[0.0, 1450.0, 1450.0, 2900.0]),
+            patch.object(cli_module.time, "sleep"),
+            patch.object(cli_module, "_probe_duration", probe),
+            patch("ani_cli_sync.subtitles.resolve_stream_info", return_value=self.INFO),
+            patch("ani_cli_sync.subtitles.prepare_subtitles", return_value=self.PLAN),
+            patch("ani_cli_sync.subtitles.build_mpv_command", build_mpv),
+            patch("ani_cli_sync.subtitles.prefetch_next_episode"),
+            patch("ani_cli_sync.subsync.vad_available", return_value=True),
+            patch("ani_cli_sync.subsync.measure_offset", measure),
+        ):
+            cli_module.cmd_watch(query="Show", autoplay=True, sub_sync="auto")
+
+        return build_mpv, measure, probe, update
+
+    def test_every_episode_is_measured_again(self):
+        _, measure, _, _ = self._drive(measurements=(_result(-3.37), _result(0.25, onset=21.79, first_cue=21.54)))
+        self.assertEqual(measure.call_count, 2, "episode 3 reused episode 2's measurement")
+
+    def test_each_episode_gets_its_own_offset(self):
+        build_mpv, _, _, _ = self._drive(
+            measurements=(_result(-3.37), _result(0.25, onset=21.79, first_cue=21.54))
+        )
+        self.assertEqual([c.kwargs["sub_delay"] for c in build_mpv.call_args_list], [-3.37, 0.25])
 
 if __name__ == "__main__":
     unittest.main()

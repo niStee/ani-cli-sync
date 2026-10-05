@@ -911,9 +911,13 @@ def cmd_watch(
                         primary_lang=sub_primary or os.environ.get("ANI_CLI_SYNC_SUB_PRIMARY", "de"),
                         secondary_lang=sec_lang,
                     )
+                    # Per-episode: the offset belongs to one subtitle file, never to the
+                    # invocation. Writing the result into `sub_delay` would make the guard
+                    # reject the next episode and replay this episode's shift on it.
+                    episode_delay = sub_delay
                     if _should_auto_measure(sub_sync, sub_delay):
-                        sub_delay = _auto_sub_delay(stream_info, sub_plan)
-                    cmd = build_mpv_command(stream_info, sub_plan, search_arg, ep_arg, sub_delay=sub_delay)
+                        episode_delay = _auto_sub_delay(stream_info, sub_plan)
+                    cmd = build_mpv_command(stream_info, sub_plan, search_arg, ep_arg, sub_delay=episode_delay)
                     if not skip_intro:
                         cmd = [arg for arg in cmd if not arg.startswith("--script-opts-append=skip-")]
 

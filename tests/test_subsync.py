@@ -267,12 +267,31 @@ class TestVadAudioType(unittest.TestCase):
         self.assertTrue(math.isclose(onset, 2.0))
 
     def test_returns_none_when_numpy_missing(self):
-        # numpy is a hard dependency of silero-vad; without it we must not guess.
+        # numpy is a hard dependency of silero-vad; without it we must not guess rather
+        # than hand the VAD something it cannot index.
+        #
+        # sys.meta_path is the right hook because it is consulted only on a sys.modules
+        # miss. Patching builtins.__import__ instead breaks the earlier
+        # `from silero_vad import ...` first, so the function returns None via a
+        # different branch and the numpy path is never exercised.
+        blocked: list[str] = []
+
+        class BlockNumpy:
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname == "numpy" or fullname.startswith("numpy."):
+                    blocked.append(fullname)
+                    raise ImportError(f"numpy blocked for test: {fullname}")
+
         with tempfile.TemporaryDirectory() as tmp:
             wav = Path(tmp) / "probe.wav"
-            self._write_wav(wav, seconds=0.5)
-            fake_vad = self._fake_vad({}, 0)
-            with patch.dict(sys.modules, {"silero_vad": fake_vad}), patch.dict(sys.modules):
+            self._write_wav(wav, seconds=3.0)
+            with (
+                patch.dict(sys.modules, {"silero_vad": self._fake_vad({}, 0)}),
+                patch.dict(sys.modules),
+                patch.object(sys, "meta_path", [BlockNumpy(), *sys.meta_path]),
+            ):
                 sys.modules.pop("numpy", None)
-                with patch("builtins.__import__", side_effect=ImportError("numpy")):
-                    self.assertIsNone(_first_speech_onset(wav))
+                self.assertIsNone(_first_speech_onset(wav))
+
+        # Proves the silero import succeeded and execution really reached the numpy step.
+        self.assertIn("numpy", blocked)

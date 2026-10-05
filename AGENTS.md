@@ -157,6 +157,20 @@ reason and leaves timing unchanged. A missing extra is likewise a no-op, not an 
 **How it measures.** `offset = first_speech_onset - first_cue`, using the primary subtitle
 track (`sub_plan.sub_files[0]`, same track selection as `--sub-delay`).
 
+Measured per episode, inside the watch loop. The offset is a property of one subtitle file,
+so the result is held in a per-episode local and never written back into `--sub-delay`:
+doing so would make the next iteration treat it as a manual value, skip its measurement,
+and replay the previous episode's shift on it. AoT ep1 wants `-3.37` and ep2 wants `+0.25`;
+carrying ep1's value across mis-times ep2 by seconds.
+
+**Requires the subtitles path.** Measurement runs inside the subtitle-fallback branch, so
+`--dub` and `--no-sub-fallback` skip it silently and leave timing unchanged.
+
+**Provenance of the numbers below.** They come from a standalone measurement run, not from
+this code path; live validation of `--sub-sync=auto` against the real VAD is tracked as a
+follow-up issue. The feature is fail-closed, so an unproven measurement leaves timing
+unchanged rather than guessing.
+
 **Why a neural VAD and not `silencedetect`.** Anime openings carry a loud music bed, so
 energy-based silence detection locks onto the music rather than the narration. Silero was
 measured at 101x realtime (300s of audio in 2.97s) and matched the hand-measured values:
