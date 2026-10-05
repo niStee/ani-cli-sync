@@ -15,6 +15,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from ani_cli_sync.subsync import (
     MAX_PLAUSIBLE_OFFSET,
+    _first_cue,
     _first_speech_onset,
     measure_offset,
 )
@@ -295,3 +296,65 @@ class TestVadAudioType(unittest.TestCase):
 
         # Proves the silero import succeeded and execution really reached the numpy step.
         self.assertIn("numpy", blocked)
+
+
+class TestSubtitleFetchHeaders(unittest.TestCase):
+    """The provider 403s subtitle URLs unless the stream's Referer is sent.
+
+    Verified live against hls.dramahot.top with a freshly resolved stream: the same URL
+    returns HTTP 403 with only a User-Agent and HTTP 200 with the Referer that mpv
+    already receives via --referrer. Without this the measurement silently reports
+    "no cues in the subtitle file" on every episode.
+    """
+
+    URL = "https://hls.example/v/abc/subs/de.vtt"
+    REFERRER = "https://zokoanime.video/"
+
+    def _capture(self, body: bytes):
+        """Patch urlopen and return the dict that ends up holding request headers."""
+        captured: dict = {}
+
+        class _Resp:
+            def read(self, *_a):
+                return body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_a):
+                return False
+
+        def fake_urlopen(req, timeout=None):
+            captured["headers"] = {k.lower(): v for k, v in req.header_items()}
+            captured["url"] = req.full_url
+            return _Resp()
+
+        patcher = patch("urllib.request.urlopen", side_effect=fake_urlopen)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return captured
+
+    def test_first_cue_sends_referer(self):
+        captured = self._capture(SAMPLE_VTT.encode())
+        cue = _first_cue(self.URL, referrer=self.REFERRER)
+        self.assertAlmostEqual(cue, 41.87, places=2)
+        self.assertEqual(captured["headers"].get("referer"), self.REFERRER)
+
+    def test_first_cue_still_works_without_a_referrer(self):
+        # Local cache paths and providers that do not gate on Referer must keep working.
+        self._capture(SAMPLE_VTT.encode())
+        self.assertAlmostEqual(_first_cue(self.URL), 41.87, places=2)
+
+    def test_measure_offset_forwards_the_stream_referrer(self):
+        captured = self._capture(SAMPLE_VTT.encode())
+        info = StreamInfo(video_link="https://hls.example/1080/index.m3u8", referrer=self.REFERRER)
+        with (
+            patch("ani_cli_sync.subsync.vad_available", return_value=True),
+            patch("ani_cli_sync.subsync._extract_audio", return_value=None),
+        ):
+            result = measure_offset(info, self.URL)
+        self.assertEqual(captured["headers"].get("referer"), self.REFERRER)
+        # Audio decode was stubbed out, so the measurement is not confident, but the cue
+        # must have been fetched successfully for us to get that far.
+        self.assertFalse(result.confident)
+        self.assertEqual(result.first_cue, 41.87)

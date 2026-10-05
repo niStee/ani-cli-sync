@@ -229,11 +229,16 @@ def _first_speech_onset(wav_path: Path) -> float | None:
     return None
 
 
-def _first_cue(sub_file: str) -> float | None:
+def _first_cue(sub_file: str, referrer: str | None = None) -> float | None:
     """Start time of the first cue in seconds.
 
     Reuses the module's own VTT parser so there is exactly one timestamp parser in the
     project; a second implementation would drift from it.
+
+    ``referrer`` is mandatory in practice for CDN-hosted tracks: hls.dramahot.top answers
+    403 to a subtitle URL that carries only a User-Agent, and 200 once the stream's
+    Referer is added. mpv already receives it via --referrer, which is why playback shows
+    subtitles while a bare fetch does not.
     """
     text: str | None = None
     if os.path.isfile(sub_file):
@@ -243,11 +248,11 @@ def _first_cue(sub_file: str) -> float | None:
             logger.debug("could not read subtitle file %s: %s", sub_file, exc)
             return None
     elif sub_file.startswith(("http://", "https://")):
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ani-cli-sync/1.0"}
+        if referrer:
+            headers["Referer"] = referrer
         try:
-            req = urllib.request.Request(  # nosemgrep
-                sub_file,
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ani-cli-sync/1.0"},
-            )
+            req = urllib.request.Request(sub_file, headers=headers)  # nosemgrep
             with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310 # nosemgrep
                 text = resp.read().decode("utf-8", errors="replace")
         except Exception as exc:  # noqa: BLE001 - network failure must not break playback
@@ -276,7 +281,7 @@ def measure_offset(
     if not vad_available():
         return None
 
-    first_cue = _first_cue(sub_file)
+    first_cue = _first_cue(sub_file, referrer=stream_info.referrer)
     if first_cue is None:
         return OffsetResult(
             offset=0.0,
