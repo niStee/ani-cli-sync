@@ -166,10 +166,26 @@ carrying ep1's value across mis-times ep2 by seconds.
 **Requires the subtitles path.** Measurement runs inside the subtitle-fallback branch, so
 `--dub` and `--no-sub-fallback` skip it silently and leave timing unchanged.
 
-**Provenance of the numbers below.** They come from a standalone measurement run, not from
-this code path; live validation of `--sub-sync=auto` against the real VAD is tracked as a
-follow-up issue. The feature is fail-closed, so an unproven measurement leaves timing
-unchanged rather than guessing.
+**Measured against the real VAD** (validated 2026-10-05, AoT S1 ep6, silero-vad 6.2.3):
+one measurement takes ~9s, and the pipeline decodes, runs the VAD and compares cues as
+documented. Two real-world limits were found that way:
+
+1. **The subtitle CDN requires the stream's Referer.** hls.dramahot.top answers `403` to a
+   subtitle URL carrying only a User-Agent and `200` with `Referer: <stream referrer>`.
+   mpv already sends it (`--referrer`), which is why playback shows subtitles while a bare
+   fetch does not. `measure_offset` forwards `stream_info.referrer` to `_first_cue`; without
+   it every episode reports "no cues in the subtitle file". `subtitles.fetch_vtt_text` has
+   the same omission and is tracked separately.
+2. **An opening-theme lyric as the first cue makes the measurement meaningless.** On ep6 the
+   first eight cues are italicised OP lyrics (`intro_skip` is 15-90s); the first real dialogue
+   cue is at 108.41s while the first cue is at 31.66s. Against a first speech onset of
+   116.48s that yields `+84.8s`, which `MAX_PLAUSIBLE_OFFSET` rejects as "likely a different
+   cut" -- correctly, since shifting by 84s would be catastrophic. The gate is what makes the
+   feature safe, but it also means **the measurement only applies when the first subtitle is
+   dialogue, not a lyric.** Skipping cues inside the known `intro_skip` window would widen
+   coverage, at the cost of accuracy: the first post-OP cue often precedes the first spoken
+   line by seconds of visual cold open, so the offset gets less trustworthy exactly where it
+   gets more applicable. Not done deliberately; tracked as a follow-up.
 
 **Why a neural VAD and not `silencedetect`.** Anime openings carry a loud music bed, so
 energy-based silence detection locks onto the music rather than the narration. Silero was
