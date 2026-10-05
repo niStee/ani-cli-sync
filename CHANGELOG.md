@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.1](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.8.0...ani-cli-sync-v0.8.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **subtitles:** keep timings client-side, bisect on batch count mismatch ([#65](https://github.com/niStee/ani-cli-sync/issues/65)) ([08df017](https://github.com/niStee/ani-cli-sync/commit/08df0177f40312ace600b3fb69ae3ac026daac5e)), closes [#64](https://github.com/niStee/ani-cli-sync/issues/64)
+* **subtitles:** unblock German translation (non-reasoning model + real abort) ([#61](https://github.com/niStee/ani-cli-sync/issues/61)) ([76690b2](https://github.com/niStee/ani-cli-sync/commit/76690b20a023729b8b9f66a9859ce3c0330bde44))
+
+
+### Documentation
+
+* **subtitles:** record the translation model default and its measurements ([#63](https://github.com/niStee/ani-cli-sync/issues/63)) ([c06bbf7](https://github.com/niStee/ani-cli-sync/commit/c06bbf7042a780e59a4c1ec530f6141f92c413d1))
+
 ## [0.8.0](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.7.0...ani-cli-sync-v0.8.0) (2026-10-05)
 
 
