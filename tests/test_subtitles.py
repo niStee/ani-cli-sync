@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 from ani_cli_sync.subtitles import (
@@ -284,11 +285,12 @@ class TestSubtitleTranslationAndPlanning(unittest.TestCase):
             "choices": [
                 {
                     "message": {
-                        "content": (
-                            "WEBVTT\n\n"
-                            "00:00.460 --> 00:01.880\n<b>— VOR 300 JAHREN —</b>\n\n"
-                            "00:01.960 --> 00:03.710\n<b>Das Einzige, woran ich mich erinnere, ist...</b>\n\n"
-                            "00:03.960 --> 00:06.380\n<b>Ich habe gewütet.</b>\n"
+                        "content": json.dumps(
+                            [
+                                "<b>— VOR 300 JAHREN —</b>",
+                                "<b>Das Einzige, woran ich mich erinnere, ist...</b>",
+                                "<b>Ich habe gewütet.</b>",
+                            ]
                         )
                     }
                 }
@@ -307,21 +309,18 @@ class TestSubtitleTranslationAndPlanning(unittest.TestCase):
 
     @patch("ani_cli_sync.subtitles.urllib.request.urlopen")
     def test_translate_cues_llm_zh_pinyin(self, mock_urlopen):
+        # Each element is two lines: pinyin then hanzi, joined with \n inside the
+        # JSON string so the same parser can split it back into cue lines.
         resp_json = {
             "choices": [
                 {
                     "message": {
-                        "content": (
-                            "WEBVTT\n\n"
-                            "00:00.460 --> 00:01.880\n"
-                            "<b>— Sānbǎi nián qián —</b>\n"
-                            "<b>— 三百年前 —</b>\n\n"
-                            "00:01.960 --> 00:03.710\n"
-                            "<b>Wǒ wéiyī jìde de shì...</b>\n"
-                            "<b>我唯一記得的是...</b>\n\n"
-                            "00:03.960 --> 00:06.380\n"
-                            "<b>Wǒ fākuáng le.</b>\n"
-                            "<b>我發狂了。</b>\n"
+                        "content": json.dumps(
+                            [
+                                "<b>— Sānbǎi nián qián —</b>\n<b>— 三百年前 —</b>",
+                                "<b>Wǒ wéiyī jìde de shì...</b>\n<b>我唯一記得的是...</b>",
+                                "<b>Wǒ fākuáng le.</b>\n<b>我發狂了。</b>",
+                            ]
                         )
                     }
                 }
@@ -416,6 +415,273 @@ class TestSubtitleTranslationAndPlanning(unittest.TestCase):
         mock_prepare.assert_called_once()
         self.assertEqual(mock_prepare.call_args[1]["primary_lang"], "de")
         self.assertIsNone(mock_prepare.call_args[1]["secondary_lang"])
+
+
+class TestTranslationReassemblyAfterModelDrift(unittest.TestCase):
+
+    """Issue #64: the German model occasionally merges/drops cues in a batch,
+    which used to silently shift every subsequent cue by +1 and produce the
+    translation of cue N-1 paired with the timing of cue N. The fix moves
+    timings out of the request entirely and reassembles cues client-side, so
+    a length mismatch must never shift a translation onto a different timing.
+    """
+
+    # Five cues, distinct text and distinct IDs, with timings the test can
+    # byte-compare against the input batch.
+    INPUT_CUES: ClassVar = [
+        VTTCue(identifier="1", timing="00:00.460 --> 00:01.880", lines=["Fire!"]),
+        VTTCue(identifier="2", timing="00:01.960 --> 00:03.710", lines=["Charge!"]),
+        VTTCue(identifier="3", timing="00:03.960 --> 00:06.380", lines=["Retreat!"]),
+        VTTCue(identifier="4", timing="00:06.500 --> 00:08.000", lines=["Hold!"]),
+        VTTCue(identifier="5", timing="00:08.200 --> 00:09.700", lines=["Move!"]),
+    ]
+
+    EXPECTED_DE: ClassVar = ["Feuer!", "Angriff!", "Rückzug!", "Halten!", "Bewegen!"]
+
+    def _make_urlopen_mock(self, response_by_index):
+        """Build a mock urlopen whose response depends on the size of the
+        batch in the request body. `response_by_index` maps
+        len(user_message_lines) -> response JSON dict.
+        """
+
+        def fake_urlopen(req, timeout=None):
+            body = json.loads(req.data.decode("utf-8"))
+            user_content = body["messages"][1]["content"]
+            n_lines = sum(1 for line in user_content.split("\n") if line)
+            res_data = response_by_index[n_lines]
+            resp = MagicMock()
+            resp.read.return_value = json.dumps(res_data).encode("utf-8")
+            resp.__enter__.return_value = resp
+            return resp
+
+        return fake_urlopen
+
+    def test_request_body_contains_no_timestamps(self):
+        """Capture the JSON sent and assert no timing pattern leaks through.
+        Otherwise the model could echo a shifted timing back and the +1 bug
+        would silently come back.
+        """
+        captured: dict = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode("utf-8"))
+            res_data = {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(["Feuer!", "Angriff!", "Rückzug!", "Halten!", "Bewegen!"]),
+                        }
+                    }
+                ]
+            }
+            resp = MagicMock()
+            resp.read.return_value = json.dumps(res_data).encode("utf-8")
+            resp.__enter__.return_value = resp
+            return resp
+
+        with patch("ani_cli_sync.subtitles.urllib.request.urlopen", side_effect=fake_urlopen):
+            result = translate_cues_llm(self.INPUT_CUES, target_lang="de")
+        self.assertIsNotNone(result)
+
+        body = captured["body"]
+        user_content = body["messages"][1]["content"]
+        self.assertNotIn("-->", user_content)
+
+        self.assertNotRegex(user_content, r"\d\d:\d\d")
+        # No identifier, no timing, no WEBVTT marker either.
+        self.assertNotIn("WEBVTT", user_content)
+
+    def test_bisect_recovers_correct_alignment_when_model_drops_a_cue(self):
+        """The whole-batch response has 4 items instead of 5 (model dropped
+        one). After bisect the per-cue translations land on the correct
+        timings -- none shift +1 -- and timings are byte-identical to input.
+        """
+        # Full batch returns 4 items (model dropped cue 1). Bisect halves
+        # into cues 0..1 and cues 2..4; each half is translated correctly.
+        responses = {
+            5: {
+                "choices": [
+                    {
+                        "message": {
+                            # Drops "Charge!" entirely -> old buggy code
+                            # would have paired "Angriff!" with the timing
+                            # of "Fire!" (a +1 backward shift).
+                            "content": json.dumps(
+                                ["Feuer!", "Angriff!", "Rückzug!", "Halten!"]
+                            ),
+                        }
+                    }
+                ]
+            },
+            # Left half (2 cues): translated correctly.
+            2: {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(["Feuer!", "Angriff!"]),
+                        }
+                    }
+                ]
+            },
+            # Right half (3 cues): translated correctly.
+            3: {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                ["Rückzug!", "Halten!", "Bewegen!"]
+                            ),
+                        }
+                    }
+                ]
+            },
+        }
+        with patch(
+            "ani_cli_sync.subtitles.urllib.request.urlopen",
+            side_effect=self._make_urlopen_mock(responses),
+        ):
+            result = translate_cues_llm(self.INPUT_CUES, target_lang="de")
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 5)
+        # Every timing byte-identical to input.
+        for got, orig in zip(result, self.INPUT_CUES):
+            self.assertEqual(got.timing, orig.timing)
+            self.assertEqual(got.identifier, orig.identifier)
+        # The translation paired with timing 01.960 is "Angriff!", which is
+        # the translation of "Charge!" (input cue index 1). It is NOT
+        # "Rückzug!" (the translation of input cue index 2), which is what
+        # the old +1-shift bug would have produced.
+        self.assertEqual(result[1].lines, ["Angriff!"])
+        self.assertEqual(result[1].timing, "00:01.960 --> 00:03.710")
+        # Other cues also map to their own translation, not a neighbour's.
+        self.assertEqual(result[0].lines, ["Feuer!"])
+        self.assertEqual(result[2].lines, ["Rückzug!"])
+        self.assertEqual(result[3].lines, ["Halten!"])
+        self.assertEqual(result[4].lines, ["Bewegen!"])
+    def test_leaf_persistent_mismatch_falls_back_to_original_english(self):
+        """After bisect down to a single cue that still misaligns after the
+        retry budget, that cue falls back to its original English lines at
+        its own timing. Its neighbours are still translated.
+        """
+        # For the full batch, return only 1 item (simulate everything dropped).
+        # That forces bisect -> bisect -> leaf of size 1.
+        responses = {
+            5: {"choices": [{"message": {"content": json.dumps(["Feuer!"])}}]},
+        }
+        # For the recursive half-batches of size 2 and 3, also return too few.
+        responses[3] = {"choices": [{"message": {"content": json.dumps(["Feuer!"])}}]}
+        responses[2] = {"choices": [{"message": {"content": json.dumps(["Feuer!"])}}]}
+        # For the leaf of size 1, still return too few. Now we fall back.
+        responses[1] = {"choices": [{"message": {"content": json.dumps([])}}]}
+
+        with patch(
+            "ani_cli_sync.subtitles.urllib.request.urlopen",
+            side_effect=self._make_urlopen_mock(responses),
+        ):
+            result = translate_cues_llm(self.INPUT_CUES, target_lang="de")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 5)
+        for got, orig in zip(result, self.INPUT_CUES):
+            self.assertEqual(got.timing, orig.timing)
+            self.assertEqual(got.identifier, orig.identifier)
+        # Every cue is the original English: nothing got the chance to translate.
+        for got, orig in zip(result, self.INPUT_CUES):
+            self.assertEqual(got.lines, list(orig.lines))
+
+    def test_no_shift_when_model_drops_first_cue_in_batch(self):
+        """Regression for issue #64: when the model drops cue 0 of a batch,
+        the old code paired every translation with the cue immediately after
+        it. The translation of cue T must now pair with the timing of cue T
+        (or with English fallback if bisect reaches it).
+        """
+        # Two-cue input that mirrors the AoT S1 ep5 symptom: "Fire!" then
+        # "Charge!". Model returns only "Angriff!" (the translation of
+        # "Charge!"), dropping "Feuer!" entirely. Old buggy code would have
+        # paired "Angriff!" with the timing of "Fire!" (a +1 backward shift).
+        batch = [
+            VTTCue(identifier="a", timing="00:00.460 --> 00:01.880", lines=["Fire!"]),
+            VTTCue(identifier="b", timing="00:01.960 --> 00:03.710", lines=["Charge!"]),
+        ]
+        # First request is the full 2-cue batch; the model returns 1 item.
+        # At leaf size <=2 the function falls back to original English for
+        # the whole batch when the count is still off, so result[0] is
+        # "Fire!" at its own timing and result[1] is "Charge!" at its own.
+        responses = {
+            2: {"choices": [{"message": {"content": json.dumps(["Angriff!"])}}]},
+        }
+        with patch(
+            "ani_cli_sync.subtitles.urllib.request.urlopen",
+            side_effect=self._make_urlopen_mock(responses),
+        ):
+            result = translate_cues_llm(batch, target_lang="de")
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 2)
+        # Timings are byte-identical to the input -- no shift.
+        self.assertEqual(result[0].timing, "00:00.460 --> 00:01.880")
+        self.assertEqual(result[1].timing, "00:01.960 --> 00:03.710")
+        # Neither cue carries the translation of a different cue at its own
+        # timing: result[0] is the original English "Fire!" (fallback),
+        # NOT "Angriff!". result[1] is the original English "Charge!".
+        # The crucial anti-shift assertion:
+        self.assertNotEqual(result[0].lines, ["Angriff!"])
+        self.assertEqual(result[0].lines, ["Fire!"])
+        self.assertEqual(result[1].lines, ["Charge!"])
+
+    def test_bisect_recovers_correct_alignment_zh_pinyin(self):
+        """Same regression as the German bisect test, for the zh-pinyin
+        path where each element is two lines (pinyin + hanzi).
+        """
+        cues = [
+            VTTCue(identifier="1", timing="00:00.460 --> 00:01.880", lines=["Hello"]),
+            VTTCue(identifier="2", timing="00:01.960 --> 00:03.710", lines=["World"]),
+            VTTCue(identifier="3", timing="00:03.960 --> 00:06.380", lines=["Goodbye"]),
+            VTTCue(identifier="4", timing="00:06.500 --> 00:08.000", lines=["Friend"]),
+        ]
+        # Drop one element on the full 4-cue call -> bisect kicks in.
+        responses = {
+            4: {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                [
+                                    "Nǐ hǎo\n你好",
+                                    "Shìjiè\n世界",
+                                    "Zàijiàn\n再見",
+                                ]
+                            ),
+                        }
+                    }
+                ]
+            },
+        }
+        # For the half of size 2 the model returns the correct 2-item array.
+        responses[2] = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            ["Zàijiàn\n再見", "Péngyǒu\n朋友"],
+                        )
+                    }
+                }
+            ]
+        }
+        with patch(
+            "ani_cli_sync.subtitles.urllib.request.urlopen",
+            side_effect=self._make_urlopen_mock(responses),
+        ):
+            result = translate_cues_llm(cues, target_lang="zh-pinyin")
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 4)
+        # Every timing byte-identical to input.
+        for got, orig in zip(result, cues):
+            self.assertEqual(got.timing, orig.timing)
+        # No +1 drift: timing of cue 2 carries the translation of cue 2,
+        # not the translation of cue 1.
+        self.assertEqual(result[2].lines[0], "Zàijiàn")
+        self.assertEqual(result[3].lines[0], "Péngyǒu")
 
 
 class TestTranslationDefaults(unittest.TestCase):

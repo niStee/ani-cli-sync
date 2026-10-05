@@ -230,6 +230,56 @@ def fetch_vtt_text(url: str, timeout: int = 30, referrer: str | None = None) -> 
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 # nosemgrep
         return resp.read().decode("utf-8", errors="replace")
 
+def _build_translation_payload(
+    model: str,
+    sys_prompt: str,
+    cues: list[VTTCue],
+) -> bytes:
+    """Build the JSON request body for a translation call.
+
+    The payload is text-only: timestamps and identifiers are deliberately
+    stripped so the model can never echo a shifted timing, and re-attachment
+    happens client-side from the original batch.
+    """
+    numbered = [f"{i}: {chr(10).join(cue.lines)}" for i, cue in enumerate(cues)]
+    user_content = "\n".join(numbered)
+    req_body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        "temperature": 0.1,
+    }
+    return json.dumps(req_body).encode("utf-8")
+
+
+def _parse_translation_response(content: str) -> list[list[str]] | None:
+    """Parse the model's JSON array response into per-cue text lines.
+
+    Strips an optional ```json ... ``` code fence. Returns None on any
+    structural failure so the caller can decide what to do (retry, bisect,
+    fall back to English).
+    """
+    text = content.strip()
+    if text.startswith("```"):
+        # Drop the opening fence (```json or ```) and matching closing fence.
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```\s*$", "", text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, list):
+        return None
+    lines_per_cue: list[list[str]] = []
+    for entry in data:
+        if isinstance(entry, str):
+            lines_per_cue.append(entry.split("\n"))
+        else:
+            return None
+    return lines_per_cue
+
 
 def _translate_single_batch(
     batch_idx: int,
@@ -240,20 +290,19 @@ def _translate_single_batch(
     timeout: int = 45,
     retries: int = 1,
 ) -> tuple[int, list[VTTCue] | None]:
-    """Translate an individual batch of cues with retries."""
+    """Translate an individual batch of cues with retries.
+
+    Text-only payload (no timestamps); the response is a JSON array of strings
+    in input order. Length mismatches trigger a bisect into smaller sub-batches
+    until the mismatched cue can be isolated; a single cue that still misaligns
+    after the retry budget falls back to its original English lines so timings
+    are never shifted.
+    """
     parsed_ep = urllib.parse.urlsplit(endpoint)
     if parsed_ep.scheme not in ("http", "https") or not parsed_ep.netloc:
         raise ValueError(f"Unsupported or insecure endpoint: {endpoint}")
-    input_vtt = format_vtt(batch)
-    req_body = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": input_vtt},
-        ],
-        "temperature": 0.1,
-    }
-    data = json.dumps(req_body).encode("utf-8")
+
+    data = _build_translation_payload(model, sys_prompt, batch)
 
     for attempt in range(retries):
         # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
@@ -267,15 +316,49 @@ def _translate_single_batch(
             with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 # nosemgrep
                 res_data = json.loads(resp.read().decode("utf-8"))
                 content = res_data["choices"][0]["message"]["content"]
-                batch_translated = parse_vtt(content)
-                if len(batch_translated) == len(batch):
-                    return batch_idx, batch_translated
-
-                reconstructed: list[VTTCue] = []
-                for idx, orig in enumerate(batch):
-                    lines = batch_translated[idx].lines if idx < len(batch_translated) else orig.lines
-                    reconstructed.append(VTTCue(identifier=orig.identifier, timing=orig.timing, lines=lines))
-                return batch_idx, reconstructed
+                parsed = _parse_translation_response(content)
+                if parsed is not None and len(parsed) == len(batch):
+                    return batch_idx, [
+                        VTTCue(
+                            identifier=orig.identifier,
+                            timing=orig.timing,
+                            lines=translated,
+                        )
+                        for orig, translated in zip(batch, parsed)
+                    ]
+                # Length mismatch (or unparseable): bisect to find the cue(s) the
+                # model dropped/merged. A leaf of size 1-2 that still misaligns
+                # after exhausting the retry budget falls back to original text.
+                if len(batch) <= 2:
+                    logger.warning(
+                        "Batch %d cue(s) %s..%s mismatched after retry; falling back to original",
+                        batch_idx,
+                        0,
+                        len(batch) - 1,
+                    )
+                    return batch_idx, [
+                        VTTCue(
+                            identifier=orig.identifier,
+                            timing=orig.timing,
+                            lines=list(orig.lines),
+                        )
+                        for orig in batch
+                    ]
+                mid = len(batch) // 2
+                logger.debug("Batch %d length mismatch; bisecting at %d", batch_idx, mid)
+                _, left = _translate_single_batch(
+                    batch_idx, batch[:mid], endpoint, model, sys_prompt,
+                    timeout=timeout, retries=retries,
+                )
+                if left is None:
+                    return batch_idx, None
+                _, right = _translate_single_batch(
+                    batch_idx, batch[mid:], endpoint, model, sys_prompt,
+                    timeout=timeout, retries=retries,
+                )
+                if right is None:
+                    return batch_idx, None
+                return batch_idx, left + right
         except (urllib.error.URLError, json.JSONDecodeError, OSError, KeyError, IndexError) as e:
             logger.warning("Batch %d attempt %d failed: %s", batch_idx, attempt + 1, e)
             if attempt < retries - 1:
@@ -306,8 +389,9 @@ def translate_cues_llm(
         sys_prompt = (
             "You are an expert anime subtitle translator. Translate the following English anime subtitle "
             "cues into natural, authentic German dialogue (Deutsche Synchron-/Untertitel-Konventionen). "
-            "Maintain all HTML tags (such as <b>, <i>). For each cue, preserve the exact cue index and "
-            "timecode line, and provide the German translation. Output ONLY the translated WEBVTT cues."
+            "Maintain all HTML tags (such as <b>, <i>). The user message is a numbered list of cues "
+            "in the form 'i: text'. Return ONLY a JSON array of exactly the same number of strings, "
+            "in the same order. Entry i is the German translation of cue i, with no cue numbers and no commentary."
         )
     elif target_lang == "zh-pinyin":
         sys_prompt = (
@@ -315,8 +399,10 @@ def translate_cues_llm(
             "For each English anime subtitle cue, provide a two-line translation:\n"
             "Line 1: Accurate Hanyu Pinyin with tone marks (e.g. Wǒ míngbái le, Lìmǔlǔ dàrén.)\n"
             "Line 2: Traditional Chinese characters (繁體中文, e.g. 我明白了，利姆路大人。)\n"
-            "Maintain all HTML tags (such as <b>, <i>). For each cue, preserve the exact cue index and "
-            "timecode line. Output ONLY the translated WEBVTT cues."
+            "Maintain all HTML tags (such as <b>, <i>). The user message is a numbered list of cues "
+            "in the form 'i: text'. Return ONLY a JSON array of exactly the same number of strings, "
+            "in the same order. Entry i is cue i's two-line translation joined with a newline, "
+            "with no cue numbers and no commentary."
         )
     else:
         return None
