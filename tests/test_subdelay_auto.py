@@ -214,5 +214,12 @@ class TestPerEpisodeMeasurement(unittest.TestCase):
         )
         self.assertEqual([c.kwargs["sub_delay"] for c in build_mpv.call_args_list], [-3.37, 0.25])
 
+    def test_duration_probe_skipped_when_player_exits_nonzero(self):
+        # The user closed the player: deciding "stop" needs no playlist fetch.
+        _, _, probe, update = self._drive(returncode=1, measurements=(_result(-3.37),))
+        self.assertEqual(probe.call_count, 0, "duration was fetched for a non-zero exit")
+        update.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

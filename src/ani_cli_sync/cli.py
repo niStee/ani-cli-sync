@@ -982,7 +982,10 @@ def cmd_watch(
             ret = subprocess.run(cmd, check=False)  # nosec B603 # nosemgrep
             elapsed = time.time() - t_start
 
-        advance, why = _should_advance(ret.returncode, elapsed, _probe_duration(stream_info))
+        # A non-zero exit already means "the user closed the player"; the probe only
+        # refines the zero-exit case, so don't pay for a playlist fetch we won't use.
+        duration = _probe_duration(stream_info) if ret.returncode == 0 else None
+        advance, why = _should_advance(ret.returncode, elapsed, duration)
         if not advance:
             mins = int(elapsed // 60)
             secs = int(elapsed % 60)
