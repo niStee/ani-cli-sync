@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -27,6 +28,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ani_cli_sync.menu import prepare_menu_env
+
+logger = logging.getLogger(__name__)
 
 ANILIST_API = "https://graphql.anilist.co"
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "anilist"
@@ -604,6 +607,71 @@ def resolve_episode_offset(
     return title_search, anilist_ep
 
 
+# A 24-minute episode; used only when the real duration is unknown.
+_FALLBACK_COMPLETE_SECONDS = 1400.0
+
+
+def _should_advance(returncode: int, elapsed: float, duration: float | None) -> tuple[bool, str]:
+    """Decide whether autoplay may continue to the next episode.
+
+    Only positive evidence that the episode played through allows advancing. Closing the
+    player is an explicit stop, and two cases used to get that wrong:
+
+    - A non-zero mpv exit skipped the early-stop branch entirely, because that branch was
+      nested inside ``if ret.returncode == 0``. Closing the player window can exit
+      non-zero, so the episode looked like it had played successfully.
+    - A zero exit at or past 600s counted as "watched", so closing the window 11 minutes
+      into a 24-minute episode started the next one.
+
+    ``elapsed`` is wall-clock for the mpv process, so an intro skip leaves it slightly
+    under the true duration; 90% of duration is the floor for "played through". When the
+    duration is unknown the threshold falls back to a full episode's length rather than a
+    flat 600s.
+    """
+    if returncode != 0:
+        return False, f"player exited with code {returncode}"
+
+    threshold = duration * 0.90 if duration else _FALLBACK_COMPLETE_SECONDS
+    if elapsed >= threshold:
+        return True, f"played {elapsed:.0f}s of {threshold:.0f}s"
+
+    return False, f"stopped after {elapsed:.0f}s (needed {threshold:.0f}s to count as watched)"
+
+
+def _probe_duration(stream_info) -> float | None:
+    """Total media duration in seconds, summed from the HLS media playlist.
+
+    Returns ``None`` when it cannot be determined; callers must treat that as unknown
+    rather than as zero. Costs one playlist fetch, which ani-cli already makes.
+    """
+    import re as _re
+    import urllib.request as _urllib_request
+
+    # The no-sub-fallback path builds the command without resolving stream info, so
+    # stream_info can legitimately be None. Duration is an optimisation, never a
+    # precondition for playback, so every failure mode returns None.
+    try:
+        url = stream_info.video_link
+    except AttributeError:
+        return None
+    if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        return None
+    try:
+        req = _urllib_request.Request(url, headers={"Referer": stream_info.referrer})
+        with _urllib_request.urlopen(req, timeout=15) as resp:  # nosec B310 # nosemgrep
+            body = resp.read(400_000).decode("utf-8", errors="replace")
+    except Exception as exc:  # noqa: BLE001 - duration is an optimisation, never fatal
+        logger.debug("duration probe failed for %s: %s", url, exc)
+        return None
+
+    total = 0.0
+    found = False
+    for match in _re.finditer(r"#EXTINF:\s*([0-9]+(?:\.[0-9]+)?)", body):
+        total += float(match.group(1))
+        found = True
+    return total if found and total > 0 else None
+
+
 def cmd_watch(
     query: str | None = None,
     skip_intro: bool = True,
@@ -853,97 +921,92 @@ def cmd_watch(
             ret = subprocess.run(cmd, check=False)  # nosec B603 # nosemgrep
             elapsed = time.time() - t_start
 
-        if ret.returncode == 0:
-            # elapsed now correctly measures actual mpv watch time because --no-detach
-            # keeps the process running until the user closes the player.
-            # < 600s means the user quit early (e.g. via 'q') before the episode was done.
-            if elapsed < 600:
-                mins = int(elapsed // 60)
-                secs = int(elapsed % 60)
-                print(f"\n⏹ Playback stopped early ({mins}m {secs}s). AniList progress preserved.")
+        advance, why = _should_advance(ret.returncode, elapsed, _probe_duration(stream_info))
+        if not advance:
+            mins = int(elapsed // 60)
+            secs = int(elapsed % 60)
+            print(f"\n⏹ Playback stopped ({mins}m {secs}s, {why}). AniList progress preserved.")
+            break
+
+        status = "COMPLETED" if (total_eps and curr_ep_to_play >= total_eps) else "CURRENT"
+        update_progress(token, media_id, curr_ep_to_play, status=status)
+        total_display = f"/{total_eps}" if total_eps else ""
+        print(f"\n✓ Episode {curr_ep_to_play}{total_display} finished!")
+        print(f"✓ AniList synchronized: {title_search} -> Episode {curr_ep_to_play}{total_display} [{status}]")
+
+        if status == "COMPLETED":
+            print(f"\n🎉 Completed watching '{title_search}'!")
+            sequel_node, reason = find_sequel(media_id, token=token)
+            if not sequel_node:
+                if reason:
+                    print(f"\n{reason}")
                 break
 
-            status = "COMPLETED" if (total_eps and curr_ep_to_play >= total_eps) else "CURRENT"
-            update_progress(token, media_id, curr_ep_to_play, status=status)
-            total_display = f"/{total_eps}" if total_eps else ""
-            print(f"\n✓ Episode {curr_ep_to_play}{total_display} finished!")
-            print(f"✓ AniList synchronized: {title_search} -> Episode {curr_ep_to_play}{total_display} [{status}]")
+            sequel_id = sequel_node["id"]
+            sequel_rom = (sequel_node.get("title") or {}).get("romaji") or ""
+            sequel_eng = (sequel_node.get("title") or {}).get("english") or sequel_rom
+            sequel_title = sequel_eng or sequel_rom
+            sequel_total = sequel_node.get("episodes")
+            sequel_total_display = str(sequel_total) if sequel_total else "?"
 
-            if status == "COMPLETED":
-                print(f"\n🎉 Completed watching '{title_search}'!")
-                sequel_node, reason = find_sequel(media_id, token=token)
-                if not sequel_node:
-                    if reason:
-                        print(f"\n{reason}")
-                    break
+            # Clobber guard: check existing list entry
+            existing_entry = get_media_list_entry(token, viewer["id"], sequel_id)
+            existing_progress = (existing_entry.get("progress") or 0) if existing_entry else 0
+            if existing_entry and existing_entry.get("status") == "COMPLETED":
+                print(f"\nSequel '{sequel_title}' already completed — nothing to roll over.")
+                break
 
-                sequel_id = sequel_node["id"]
-                sequel_rom = (sequel_node.get("title") or {}).get("romaji") or ""
-                sequel_eng = (sequel_node.get("title") or {}).get("english") or sequel_rom
-                sequel_title = sequel_eng or sequel_rom
-                sequel_total = sequel_node.get("episodes")
-                sequel_total_display = str(sequel_total) if sequel_total else "?"
+            if existing_progress > 0:
+                start_ep = existing_progress + 1
+            else:
+                start_ep = 1
 
-                # Clobber guard: check existing list entry
-                existing_entry = get_media_list_entry(token, viewer["id"], sequel_id)
-                existing_progress = (existing_entry.get("progress") or 0) if existing_entry else 0
-                if existing_entry and existing_entry.get("status") == "COMPLETED":
-                    print(f"\nSequel '{sequel_title}' already completed — nothing to roll over.")
-                    break
-
-                if existing_progress > 0:
-                    start_ep = existing_progress + 1
-                else:
-                    start_ep = 1
-
-                accepted = False
-                if autoplay:
+            accepted = False
+            if autoplay:
+                accepted = True
+            else:
+                prompt_msg = (
+                    f"\nFinished '{title_search}'. Sequel '{sequel_title}' found "
+                    f"({sequel_total_display} episodes). Add to Watching and continue with Episode {start_ep}? [y/N]: "
+                )
+                choice = input(prompt_msg).strip().lower()
+                if choice in ("y", "yes"):
                     accepted = True
-                else:
-                    prompt_msg = (
-                        f"\nFinished '{title_search}'. Sequel '{sequel_title}' found "
-                        f"({sequel_total_display} episodes). Add to Watching and continue with Episode {start_ep}? [y/N]: "
-                    )
-                    choice = input(prompt_msg).strip().lower()
-                    if choice in ("y", "yes"):
-                        accepted = True
 
-                if not accepted:
-                    break
+            if not accepted:
+                break
 
-                # Enroll or update status
-                if existing_entry and existing_progress > 0:
-                    if existing_entry.get("status") != "CURRENT":
-                        update_progress(token, sequel_id, existing_progress, status="CURRENT")
-                else:
-                    update_progress(token, sequel_id, 0, status="CURRENT")
-
-                if autoplay:
-                    print(f"\n▶ Autoplaying sequel '{sequel_title}' Episode {start_ep} in 3 seconds...")
-                    time.sleep(3)
-
-                # Switch loop context to the sequel
-                media_id = sequel_id
-                total_eps = sequel_total
-                total_eps_str = sequel_total_display
-                title_search = sequel_rom or sequel_eng
-                display_part = f"[00/{total_eps_str}] {sequel_eng} | {sequel_rom}"
-                curr_ep_to_play = start_ep
-                continue
+            # Enroll or update status
+            if existing_entry and existing_progress > 0:
+                if existing_entry.get("status") != "CURRENT":
+                    update_progress(token, sequel_id, existing_progress, status="CURRENT")
+            else:
+                update_progress(token, sequel_id, 0, status="CURRENT")
 
             if autoplay:
-                print(f"▶ Autoplaying Episode {curr_ep_to_play + 1} in 3 seconds...")
+                print(f"\n▶ Autoplaying sequel '{sequel_title}' Episode {start_ep} in 3 seconds...")
                 time.sleep(3)
-                curr_ep_to_play += 1
-            else:
-                next_choice = (
-                    input(f"\nPress Enter to play Episode {curr_ep_to_play + 1} (or 'q' to exit): ").strip().lower()
-                )
-                if next_choice in ("q", "quit", "exit"):
-                    break
-                curr_ep_to_play += 1
+
+            # Switch loop context to the sequel
+            media_id = sequel_id
+            total_eps = sequel_total
+            total_eps_str = sequel_total_display
+            title_search = sequel_rom or sequel_eng
+            display_part = f"[00/{total_eps_str}] {sequel_eng} | {sequel_rom}"
+            curr_ep_to_play = start_ep
+            continue
+
+        if autoplay:
+            print(f"▶ Autoplaying Episode {curr_ep_to_play + 1} in 3 seconds...")
+            time.sleep(3)
+            curr_ep_to_play += 1
         else:
-            break
+            next_choice = (
+                input(f"\nPress Enter to play Episode {curr_ep_to_play + 1} (or 'q' to exit): ").strip().lower()
+            )
+            if next_choice in ("q", "quit", "exit"):
+                break
+            curr_ep_to_play += 1
 
 
 def main() -> None:
