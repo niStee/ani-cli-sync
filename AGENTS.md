@@ -22,7 +22,7 @@ Automated AniList synchronization wrapper for [`ani-cli`](https://github.com/pys
    - **Tier 3 (Identity)**: Fallback 1-to-1 numbering.
 3. **Completion, Boundary Enforcement & Sequel Rollover**: Auto-transitions status to `COMPLETED` when `ep >= total`. Queries AniList for released TV/ONA sequels with a clobber guard (resumes at `progress + 1` if already in list, prompts in interactive mode or seamlessly continues in `--autoplay`).
 4. **Zero Third-Party Runtime Dependencies**: Implemented strictly with standard library (`urllib.request`, `json`, `argparse`, `subprocess`, `pathlib`, `concurrent.futures`).
-5. **Automated Subtitle Fallback & Dual-Track Pipeline**: Inspects stream tracks (detecting forced tracks `< 50` cues vs. full dialogue). When target tracks are missing or signs-only, translates the base English track concurrently via local LiteLLM proxy (`deepseek-v4-flash`), producing synchronized German dialogue (`--sid=1`, bottom) and Traditional Chinese + Hanyu Pinyin (`--secondary-sid=2`, top) with persistent caching in `~/.cache/ani-cli/subtitles/`.
+5. **Automated Subtitle Fallback & Dual-Track Pipeline**: Inspects stream tracks (detecting forced tracks `< 50` cues vs. full dialogue). When target tracks are missing or signs-only, translates the base English track concurrently via local LiteLLM proxy (`minimax-m3`, measured; override with `ANI_CLI_SYNC_LLM_MODEL`), producing synchronized German dialogue (`--sid=1`, bottom) and Traditional Chinese + Hanyu Pinyin (`--secondary-sid=2`, top) with persistent caching in `~/.cache/ani-cli/subtitles/`.
 
 ## Episode Offset Resolution & Precedence
 
@@ -42,6 +42,33 @@ tracks each season starting from episode 1. `resolve_episode_offset()` resolves 
 | Slime Season 4 | 1–24 | 1–24 | +0 |
 
 **Static Overrides**: To force a specific search string or override automatic chain resolution, append a tuple to `_EPISODE_OFFSETS` in `cli.py`. Standard multi-season shows are computed automatically.
+
+## Subtitle Translation Model
+
+Translation runs through the local LiteLLM proxy in `subtitles.py`, batched
+(`batch_size=50`, 5 workers), with **no `max_tokens` and no reasoning control in the request**.
+That is why the default model must be non-reasoning: a reasoning model spends its budget before
+emitting any content, and a 50-cue batch then does not finish inside the socket timeout.
+
+Measured 2026-10-05, one real 50-cue AoT S1 ep6 batch through the shipped code path:
+
+| model | wall | note |
+|---|---|---|
+| `minimax-m3` | 17.5s | default; Token Plan |
+| `minimax-m2.7-highspeed` | 29.9s | Token Plan |
+| `minimax-m2.7` | 31.8s | Token Plan |
+| `deepseek-v4-flash` | 139.4s | reasoning model; stalls the episode |
+| `gemini-3.6-flash` | - | HTTP 400 on this workload |
+
+A cold `prepare_subtitles` for a 319-cue episode is **~34s**. Two failure modes are bounded on
+purpose: `timeout=45s` per batch, `retries=1` (LiteLLM already retries internally), and
+`translate_cues_llm` aborts without waiting for in-flight siblings. The earlier
+`with ThreadPoolExecutor` return path shut the executor down with `wait=True`, so a known
+failure still cost the slowest sibling's full budget -- that was a 180s stall.
+
+The OpenCode Go `backup-minimax-*` deployments are `rpm: 2, max_parallel_requests: 1`, so a
+failover onto them serialises 5 batch workers and is a latency trap for this workload; the
+direct Token Plan deployments are the ones that matter.
 
 ## Commands & Testing
 
