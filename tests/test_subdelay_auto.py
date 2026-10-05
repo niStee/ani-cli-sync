@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -9,9 +8,9 @@ from unittest.mock import patch
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from ani_cli_sync.cli import _auto_sub_delay, _should_auto_measure  # noqa: E402
-from ani_cli_sync.subsync import OffsetResult  # noqa: E402
-from ani_cli_sync.subtitles import StreamInfo, SubtitlePlan  # noqa: E402
+from ani_cli_sync.cli import _auto_sub_delay, _should_auto_measure
+from ani_cli_sync.subsync import OffsetResult
+from ani_cli_sync.subtitles import StreamInfo, SubtitlePlan
 
 INFO = StreamInfo(video_link="https://hls.example/1080/index.m3u8", referrer="https://zokoanime.video/")
 PLAN = SubtitlePlan(sub_files=["/cache/de.vtt"], sid=1, secondary_sid=0)
@@ -123,11 +122,10 @@ class TestSubSyncCliSurface(unittest.TestCase):
         self.assertEqual(self._parsed(["ani-cli-sync", "--sub-sync=auto"])["sub_sync"], "auto")
 
     def test_rejects_unknown_value(self):
-        with patch.object(sys, "argv", ["ani-cli-sync", "watch", "--sub-sync", "bogus"]):
-            with self.assertRaises(SystemExit):
-                import ani_cli_sync.cli as cli_module
+        with patch.object(sys, "argv", ["ani-cli-sync", "watch", "--sub-sync", "bogus"]), self.assertRaises(SystemExit):
+            import ani_cli_sync.cli as cli_module
 
-                cli_module.main()
+            cli_module.main()
 
     def test_manual_delay_still_parsed_alongside(self):
         captured = self._parsed(["ani-cli-sync", "watch", "--sub-delay", "-1.5", "--sub-sync", "auto"])

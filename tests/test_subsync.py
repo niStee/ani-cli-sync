@@ -13,13 +13,12 @@ from unittest.mock import patch
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from ani_cli_sync.subsync import (  # noqa: E402
+from ani_cli_sync.subsync import (
     MAX_PLAUSIBLE_OFFSET,
-    OffsetResult,
     _first_speech_onset,
     measure_offset,
 )
-from ani_cli_sync.subtitles import StreamInfo, parse_vtt  # noqa: E402
+from ani_cli_sync.subtitles import StreamInfo, parse_vtt
 
 SAMPLE_VTT = """WEBVTT
 
@@ -147,12 +146,12 @@ class TestGracefulDegradation(unittest.TestCase):
             with (
                 patch("ani_cli_sync.subsync._extract_audio", return_value=Path(td) / "a.wav"),
                 patch("builtins.__import__", side_effect=fake_import),
-            ):  # noqa: SIM117
+            ):
                 r = measure_offset(INFO, str(sub))
         self.assertIsNone(r)
 
     def test_vad_available_flag_is_false_when_missing(self):
-        import ani_cli_sync.subsync as subsync
+        from ani_cli_sync import subsync
 
         real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__
 
@@ -170,7 +169,7 @@ class TestFfmpegExtraction(unittest.TestCase):
     otherwise rejects with 'not in allowed_segment_extensions'."""
 
     def test_extract_audio_passes_extension_picky_and_referer(self):
-        import ani_cli_sync.subsync as subsync
+        from ani_cli_sync import subsync
 
         with patch("ani_cli_sync.subsync.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess([], 0, b"", b"")
@@ -187,7 +186,7 @@ class TestFfmpegExtraction(unittest.TestCase):
         )
 
     def test_extract_audio_returns_none_on_ffmpeg_failure(self):
-        import ani_cli_sync.subsync as subsync
+        from ani_cli_sync import subsync
 
         with patch("ani_cli_sync.subsync.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess([], 1, b"", b"boom")
@@ -272,8 +271,8 @@ class TestVadAudioType(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             wav = Path(tmp) / "probe.wav"
             self._write_wav(wav, seconds=0.5)
-            with patch.dict(sys.modules, {"silero_vad": self._fake_vad({}, 0)}):
-                with patch.dict(sys.modules):
-                    sys.modules.pop("numpy", None)
-                    with patch("builtins.__import__", side_effect=ImportError("numpy")):
-                        self.assertIsNone(_first_speech_onset(wav))
+            fake_vad = self._fake_vad({}, 0)
+            with patch.dict(sys.modules, {"silero_vad": fake_vad}), patch.dict(sys.modules):
+                sys.modules.pop("numpy", None)
+                with patch("builtins.__import__", side_effect=ImportError("numpy")):
+                    self.assertIsNone(_first_speech_onset(wav))

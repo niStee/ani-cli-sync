@@ -7,7 +7,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from ani_cli_sync.cli import _should_advance  # noqa: E402
+from ani_cli_sync.cli import _should_advance
 
 
 class TestAutoplayStopSemantics(unittest.TestCase):
