@@ -256,7 +256,7 @@ class TestSubtitleTranslationAndPlanning(unittest.TestCase):
         arabic_vtt = "WEBVTT\n\n00:00.460 --> 00:01.880\nARABIC-LINE\n"
         english_vtt = "WEBVTT\n\n00:00.460 --> 00:01.880\nENGLISH-LINE\n"
 
-        def fake_fetch(url, timeout=30):
+        def fake_fetch(url, timeout=30, referrer=None):
             if url.endswith("arabic.vtt"):
                 return arabic_vtt
             if url.endswith("english.vtt"):
@@ -413,6 +413,73 @@ class TestSubtitleTranslationAndPlanning(unittest.TestCase):
         mock_prepare.assert_called_once()
         self.assertEqual(mock_prepare.call_args[1]["primary_lang"], "de")
         self.assertIsNone(mock_prepare.call_args[1]["secondary_lang"])
+
+
+class TestFetchVttHeaders(unittest.TestCase):
+    """The subtitle CDN 403s a fetch that omits the stream's Referer.
+
+    Verified live against hls.dramahot.top with a freshly resolved stream: identical URL,
+    HTTP 403 with only a User-Agent, HTTP 200 with the stream's Referer. mpv already sends
+    it via --referrer, which is why subtitles play but never reached the cache.
+    """
+
+    URL = "https://hls.example/v/abc/subs/en.vtt"
+    REFERRER = "https://zokoanime.video/"
+
+    def _capture(self):
+        captured: dict = {}
+
+        class _Resp:
+            def read(self, *_a):
+                return SAMPLE_VTT.encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_a):
+                return False
+
+        def fake_urlopen(req, timeout=None):
+            captured["headers"] = {k.lower(): v for k, v in req.header_items()}
+            return _Resp()
+
+        patcher = patch("urllib.request.urlopen", side_effect=fake_urlopen)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return captured
+
+    def test_sends_referer_when_given(self):
+        captured = self._capture()
+        self.assertIn("WEBVTT", fetch_vtt_text(self.URL, referrer=self.REFERRER))
+        self.assertEqual(captured["headers"].get("referer"), self.REFERRER)
+
+    def test_no_referrer_still_fetches(self):
+        # Providers that do not gate on Referer, and existing callers, keep working.
+        captured = self._capture()
+        self.assertIn("WEBVTT", fetch_vtt_text(self.URL))
+        self.assertNotIn("referer", captured["headers"])
+
+    def test_user_agent_is_always_sent(self):
+        captured = self._capture()
+        fetch_vtt_text(self.URL, referrer=self.REFERRER)
+        self.assertIn("ani-cli-sync", captured["headers"].get("user-agent", ""))
+
+    def test_prepare_subtitles_forwards_the_stream_referrer(self):
+        captured = self._capture()
+        info = StreamInfo(
+            video_link="https://hls.example/1080/index.m3u8",
+            referrer=self.REFERRER,
+            subtitles=[{"lang": "en", "label": "English", "src": self.URL}],
+        )
+        with (
+            tempfile.TemporaryDirectory() as td,
+            patch("ani_cli_sync.subtitles.translate_cues_llm", return_value=None),
+        ):
+            plan = prepare_subtitles(info, "aot", 6, primary_lang="de", cache_dir=Path(td))
+        self.assertEqual(captured["headers"].get("referer"), self.REFERRER)
+        # German track absent -> base English fetched (and translation stubbed out below is
+        # not needed: without a translator the plan falls back to the English URL).
+        self.assertTrue(plan.sub_files)
 
 
 class TestFetchVttSecurity(unittest.TestCase):

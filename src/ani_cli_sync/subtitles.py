@@ -209,16 +209,22 @@ def resolve_stream_info(
         return None
 
 
-def fetch_vtt_text(url: str, timeout: int = 30) -> str:
-    """Download VTT subtitle text from a URL."""
+def fetch_vtt_text(url: str, timeout: int = 30, referrer: str | None = None) -> str:
+    """Download VTT subtitle text from a URL.
+
+    ``referrer`` is required in practice for CDN-hosted tracks: hls.dramahot.top answers
+    HTTP 403 to a subtitle URL carrying only a User-Agent and 200 once the stream's Referer
+    is present. mpv already receives it via --referrer, so playback shows subtitles that this
+    function could not fetch, and the translation pipeline silently produced nothing.
+    """
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise ValueError(f"Unsupported or insecure URL: {url}")
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ani-cli-sync/1.0"}
+    if referrer:
+        headers["Referer"] = referrer
     # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ani-cli-sync/1.0"},
-    )
+    req = urllib.request.Request(url, headers=headers)
     # nosec B310
     # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 # nosemgrep
@@ -408,7 +414,7 @@ def prepare_subtitles(
     # Check if stream primary is full dialogue or forced signs
     if not primary_file and stream_de_url:
         try:
-            de_content = fetch_vtt_text(stream_de_url)
+            de_content = fetch_vtt_text(stream_de_url, referrer=stream_info.referrer)
             if not is_forced_track(de_content):
                 primary_cache_path.write_text(de_content, encoding="utf-8")
                 primary_file = str(primary_cache_path)
@@ -421,7 +427,7 @@ def prepare_subtitles(
 
     if (needs_primary_translation or needs_secondary_translation) and stream_en_url:
         try:
-            base_content = fetch_vtt_text(stream_en_url)
+            base_content = fetch_vtt_text(stream_en_url, referrer=stream_info.referrer)
             base_cues = parse_vtt(base_content)
 
             if needs_primary_translation:
