@@ -610,7 +610,7 @@ class TestSequelRollover(unittest.TestCase):
             unittest.mock.patch.object(cli_module.subprocess, "run", mock_subproc),
             unittest.mock.patch("builtins.input", side_effect=lambda *_: next(input_iter)),
             unittest.mock.patch.object(
-                cli_module.time, "time", side_effect=[0.0, 700.0, 700.0, 1400.0, 1400.0, 2100.0]
+                cli_module.time, "time", side_effect=[0.0, 1450.0, 1450.0, 2900.0, 2900.0, 4400.0]
             ),
             unittest.mock.patch.object(cli_module.time, "sleep"),
         ):
@@ -744,7 +744,7 @@ class TestSequelRollover(unittest.TestCase):
             unittest.mock.patch.object(cli_module, "update_progress", mock_update),
             unittest.mock.patch.object(cli_module.subprocess, "run", mock_subproc),
             unittest.mock.patch.object(
-                cli_module.time, "time", side_effect=[0.0, 700.0, 700.0, 1400.0, 1400.0, 2100.0]
+                cli_module.time, "time", side_effect=[0.0, 1450.0, 1450.0, 2900.0, 2900.0, 4400.0]
             ),
             unittest.mock.patch.object(cli_module.time, "sleep"),
         ):
@@ -922,6 +922,17 @@ class TestSequelRollover(unittest.TestCase):
 
 class TestSequelHelpers(unittest.TestCase):
     """Unit tests for find_sequel, get_media_list_entry, and has_table_offset_match."""
+
+    def setUp(self):
+        # _probe_duration fetches the HLS media playlist over the network. Keep the
+        # unit suite hermetic: an unknown duration falls back to the conservative
+        # full-episode threshold, which is what these tests assert against.
+        import ani_cli_sync.cli as cli_module
+
+        patcher = unittest.mock.patch.object(cli_module, "_probe_duration", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
 
     def test_find_sequel_returns_node_on_valid_sequel(self):
         resp = {
@@ -1161,6 +1172,17 @@ class TestSequelHelpers(unittest.TestCase):
 
 class TestEpisodeProbeFallback(unittest.TestCase):
     """Unit tests for the two-pass probe and fallback when continuous offset fails."""
+
+    def setUp(self):
+        # _probe_duration fetches the HLS media playlist over the network. Keep the
+        # unit suite hermetic: an unknown duration falls back to the conservative
+        # full-episode threshold, which is what these tests assert against.
+        import ani_cli_sync.cli as cli_module
+
+        patcher = unittest.mock.patch.object(cli_module, "_probe_duration", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
 
     def test_stream_resolution_probe_fallback_to_season_relative(self):
         """When resolve_stream_info fails on continuous ep (e.g. 25), retry season ep (1) and cache 0."""

@@ -31,6 +31,11 @@ classifiers = [
     "Topic :: Utilities",
 ]
 
+[project.optional-dependencies]
+# Opt-in only. silero-vad pulls torch transitively, so the core stays
+# standard-library-only and a default install still pulls nothing.
+subsync = ["silero-vad>=5.1", "onnxruntime>=1.16"]
+
 [project.urls]
 Homepage = "https://github.com/niStee/ani-cli-sync"
 Repository = "https://github.com/niStee/ani-cli-sync"

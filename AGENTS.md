@@ -67,7 +67,29 @@ ani-cli-sync set <title> <ep>  # Update progress (AniList ep, NOT scraper ep)
 ani-cli-sync login      # OAuth setup
 ani-cli-sync -a         # Watch with autoplay
 ani-cli-sync watch --sub-delay=-3.8 "Attack on Titan"  # Per-episode, measured per release (see below)
+ani-cli-sync watch --sub-sync=auto "Attack on Titan"   # Measure and apply the offset automatically
 ```
+
+## Autoplay Stop Semantics
+
+`--autoplay` advances to the next episode only on **positive evidence that the episode
+played through**. Closing the player window must always stop the chain, never skip an episode.
+
+| mpv exit | elapsed watch time | outcome |
+|---|---|---|
+| non-zero | any | **stop** - treated as the user closing the player |
+| 0 | `>= 90%` of probed duration | advance |
+| 0 | otherwise (user closed early) | **stop** |
+| 0 | duration unknown | advance only at `>= 1400s` |
+
+The duration is summed from the HLS media playlist (`#EXTINF`). This is an optimisation only:
+when the probe fails, or in the `no_sub_fallback` path where no stream info is resolved at
+all, the conservative full-episode fallback applies.
+
+**Why the previous logic was wrong.** It advanced on any non-zero exit (so closing mpv
+skipped the episode) and treated any zero exit past a flat `600s` threshold as "finished",
+which advanced even when the user had closed the window early. Both are corrected by
+`_should_advance()` in `cli.py`, covered by `tests/test_autoplay_stop.py`.
 
 ## Subtitle Sync Offset (`--sub-delay`)
 
@@ -116,9 +138,67 @@ print(i.subtitles[0]['src'])
 `offset = first_cue - audio_onset`, so a negative result means the subs are late and must be
 pulled earlier. Fine-tune in mpv with `z` / `Z` (-0.1s / -1s) and `x` / `X` (+0.1s / +1s).
 
-Automating the audio side is not currently practical: the HLS segments are served with a
-`.ts.jpg` extension that ffmpeg rejects (`not in allowed_segment_extensions`), so
-`silencedetect` cannot read the stream without a workaround.
+### Automating the measurement: `--sub-sync=auto`
+
+`--sub-sync=auto` measures the offset per episode and applies it, for the case where you do
+not want to hand-measure every release. Default is `off`; override with
+`ANI_CLI_SYNC_SUB_SYNC=auto`. An explicit non-zero `--sub-delay` always wins and suppresses
+measurement entirely.
+
+```bash
+uv tool install "ani-cli-sync[subsync]"   # optional extra, pulls torch via silero-vad
+ani-cli-sync watch --sub-sync=auto "Attack on Titan"
+```
+
+It is **off by default and reports rather than guesses**: if the VAD finds no speech, the
+subtitle file has no first cue, or the resulting offset is implausible (>60s), it prints the
+reason and leaves timing unchanged. A missing extra is likewise a no-op, not an error.
+
+**How it measures.** `offset = first_speech_onset - first_cue`, using the primary subtitle
+track (`sub_plan.sub_files[0]`, same track selection as `--sub-delay`).
+
+Measured per episode, inside the watch loop. The offset is a property of one subtitle file,
+so the result is held in a per-episode local and never written back into `--sub-delay`:
+doing so would make the next iteration treat it as a manual value, skip its measurement,
+and replay the previous episode's shift on it. AoT ep1 wants `-3.37` and ep2 wants `+0.25`;
+carrying ep1's value across mis-times ep2 by seconds.
+
+**Requires the subtitles path.** Measurement runs inside the subtitle-fallback branch, so
+`--dub` and `--no-sub-fallback` skip it silently and leave timing unchanged.
+
+**Measured against the real VAD** (validated 2026-10-05, AoT S1 ep6, silero-vad 6.2.3):
+one measurement takes ~9s, and the pipeline decodes, runs the VAD and compares cues as
+documented. Two real-world limits were found that way:
+
+1. **The subtitle CDN requires the stream's Referer.** hls.dramahot.top answers `403` to a
+   subtitle URL carrying only a User-Agent and `200` with `Referer: <stream referrer>`.
+   mpv already sends it (`--referrer`), which is why playback shows subtitles while a bare
+   fetch does not. `measure_offset` forwards `stream_info.referrer` to `_first_cue`; without
+   it every episode reports "no cues in the subtitle file". `subtitles.fetch_vtt_text` has
+   the same omission and is tracked separately.
+2. **An opening-theme lyric as the first cue makes the measurement meaningless.** On ep6 the
+   first eight cues are italicised OP lyrics (`intro_skip` is 15-90s); the first real dialogue
+   cue is at 108.41s while the first cue is at 31.66s. Against a first speech onset of
+   116.48s that yields `+84.8s`, which `MAX_PLAUSIBLE_OFFSET` rejects as "likely a different
+   cut" -- correctly, since shifting by 84s would be catastrophic. The gate is what makes the
+   feature safe, but it also means **the measurement only applies when the first subtitle is
+   dialogue, not a lyric.** Skipping cues inside the known `intro_skip` window would widen
+   coverage, at the cost of accuracy: the first post-OP cue often precedes the first spoken
+   line by seconds of visual cold open, so the offset gets less trustworthy exactly where it
+   gets more applicable. Not done deliberately; tracked as a follow-up.
+
+**Why a neural VAD and not `silencedetect`.** Anime openings carry a loud music bed, so
+energy-based silence detection locks onto the music rather than the narration. Silero was
+measured at 101x realtime (300s of audio in 2.97s) and matched the hand-measured values:
+AoT ep1 `-3.37` vs `-3.8` verified (error 0.43), ep2 `+0.25` vs `0` verified (error 0.25).
+Whole-file correlation tools (`ffsubsync`, WebRTC-style alignment) were rejected: a flat
+correlation plateau over anime dialogue produces boundary-saturating, unusable results.
+
+**Reading the HLS stream.** Segments are served with a `.ts.jpg` extension that ffmpeg's
+format probe rejects. `-extension_picky 0` is required; `-allowed_segment_extensions ALL`
+alone is **not** sufficient, because it does not bypass the probe.
+
+**Not done:** intro/OP-skip detection is deliberately separate and not attempted here.
 
 **Verify before choosing a value.** Compare the first cue of each candidate track; if every
 English track shares one first-cue timestamp they are all cut to the same timing, and there
