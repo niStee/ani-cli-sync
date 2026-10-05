@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.8.0](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.7.0...ani-cli-sync-v0.8.0) (2026-10-05)
+
+
+### Features
+
+* **sub-sync:** opt-in per-episode subtitle offset measurement + autoplay stop fix ([#59](https://github.com/niStee/ani-cli-sync/issues/59)) ([bff13d1](https://github.com/niStee/ani-cli-sync/commit/bff13d19691ac781054c84676e61ce51b90d8375))
+* **subtitles:** add --sub-delay to shift subs for dub-timed tracks on JP audio ([#49](https://github.com/niStee/ani-cli-sync/issues/49)) ([7de8679](https://github.com/niStee/ani-cli-sync/commit/7de867967da533ba4a99b4f4fb27de95d6f9089c))
+
+
+### Bug Fixes
+
+* **subtitles:** select subtitle tracks by label, not by the provider's uniform lang ([#50](https://github.com/niStee/ani-cli-sync/issues/50)) ([cdffa39](https://github.com/niStee/ani-cli-sync/commit/cdffa394521cc4db5c6de79b64dafc2472113b56))
+* **watch:** autoplay + query falls back to global AniList search instead of dying on non-tty fzf ([#48](https://github.com/niStee/ani-cli-sync/issues/48)) ([8661256](https://github.com/niStee/ani-cli-sync/commit/866125654d56201b8c1421fa05ecb7a27a0b58ed))
+
+
+### Documentation
+
+* **subtitles:** correct --sub-delay guidance -- the offset is per-episode, not per-show ([#57](https://github.com/niStee/ani-cli-sync/issues/57)) ([05d1561](https://github.com/niStee/ani-cli-sync/commit/05d156194ae718acf61afcba943349e93031f382))
+* **subtitles:** mark the ep2 offset playback-verified at 0 ([#58](https://github.com/niStee/ani-cli-sync/issues/58)) ([d19069a](https://github.com/niStee/ani-cli-sync/commit/d19069a4dcab72bdce677442cb80230ee68cfc71))
+
 ## [0.7.0](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.6.0...ani-cli-sync-v0.7.0) (2026-09-16)
 
 
