@@ -672,6 +672,60 @@ def _probe_duration(stream_info) -> float | None:
     return total if found and total > 0 else None
 
 
+def _should_auto_measure(sub_sync: str, sub_delay: float) -> bool:
+    """Whether to measure the subtitle offset for this episode.
+
+    An explicit --sub-delay always wins: a value the operator typed is a deliberate
+    correction and must never be overridden by a measurement.
+    """
+    return sub_sync == "auto" and not sub_delay
+
+
+def _auto_sub_delay(stream_info, sub_plan) -> float:
+    """Measure this episode's subtitle offset. Returns 0.0 to leave timing unchanged.
+
+    Never raises: a measurement failure must not stop playback. A manual --sub-delay is
+    applied by the caller before this runs, so an explicit value is never overridden.
+    """
+    primary = sub_plan.sub_files[0] if sub_plan.sub_files else None
+    if not primary:
+        print("  ℹ️ sub-sync: no subtitle track selected, leaving timing unchanged.")
+        return 0.0
+
+    try:
+        from ani_cli_sync.subsync import measure_offset, vad_available
+    except ImportError as exc:
+        print(f"  ℹ️ sub-sync unavailable: {exc}")
+        return 0.0
+
+    if not vad_available():
+        print(
+            "  ℹ️ sub-sync: the optional VAD is not installed, leaving timing unchanged.\n"
+            '     Install it with: uv tool install "ani-cli-sync[subsync]"'
+        )
+        return 0.0
+
+    try:
+        result = measure_offset(stream_info, primary)
+    except Exception as exc:  # noqa: BLE001 - playback must not fail on a measurement error
+        print(f"  ⚠️ sub-sync failed ({exc}), leaving timing unchanged.")
+        return 0.0
+
+    if result is None:
+        print("  ⚠️ sub-sync produced no result, leaving timing unchanged.")
+        return 0.0
+
+    if not result.confident:
+        print(f"  ℹ️ sub-sync: {result.reason}. Leaving timing unchanged.")
+        return 0.0
+
+    print(f"  ⟲ sub-sync: {result.describe()}")
+    if abs(result.offset) < 0.05:
+        print("     Offset is negligible; not applying a shift.")
+        return 0.0
+    return result.offset
+
+
 def cmd_watch(
     query: str | None = None,
     skip_intro: bool = True,
@@ -683,6 +737,7 @@ def cmd_watch(
     no_sub_fallback: bool = False,
     uncensored: bool = True,
     sub_delay: float = 0.0,
+    sub_sync: str = "off",
 ) -> None:
     """Launch ani-cli for an anime, track watch state, and synchronize to AniList."""
     token = get_token()
@@ -856,6 +911,8 @@ def cmd_watch(
                         primary_lang=sub_primary or os.environ.get("ANI_CLI_SYNC_SUB_PRIMARY", "de"),
                         secondary_lang=sec_lang,
                     )
+                    if _should_auto_measure(sub_sync, sub_delay):
+                        sub_delay = _auto_sub_delay(stream_info, sub_plan)
                     cmd = build_mpv_command(stream_info, sub_plan, search_arg, ep_arg, sub_delay=sub_delay)
                     if not skip_intro:
                         cmd = [arg for arg in cmd if not arg.startswith("--script-opts-append=skip-")]
@@ -1077,6 +1134,18 @@ def main() -> None:
                 "within one release, so a value tuned on one episode can mis-time the next."
             ),
         )
+        p.add_argument(
+            "--sub-sync",
+            choices=("off", "auto"),
+            default=os.environ.get("ANI_CLI_SYNC_SUB_SYNC", "off"),
+            help=(
+                "Measure this episode's subtitle offset and apply it automatically (default: off). "
+                "Requires the optional subsync extra: uv tool install \"ani-cli-sync[subsync]\". "
+                "Uses a neural VAD because energy-based detection locks onto the music bed "
+                "under an anime narration. Reports instead of shifting when unsure. An explicit "
+                "--sub-delay always takes precedence."
+            ),
+        )
     watch_parser.add_argument("query", nargs="?", default=None, help="Optional anime title to watch directly")
 
     args_list = sys.argv[1:]
@@ -1106,9 +1175,10 @@ def main() -> None:
             no_sub_fallback=args.no_sub_fallback,
             uncensored=args.uncensored,
             sub_delay=args.sub_delay,
+            sub_sync=args.sub_sync,
         )
     else:
-        cmd_watch(uncensored=args.uncensored, sub_delay=args.sub_delay)
+        cmd_watch(uncensored=args.uncensored, sub_delay=args.sub_delay, sub_sync=args.sub_sync)
 
 
 if __name__ == "__main__":
