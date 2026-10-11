@@ -684,6 +684,93 @@ class TestTranslationReassemblyAfterModelDrift(unittest.TestCase):
         self.assertEqual(result[2].lines[0], "Zàijiàn")
         self.assertEqual(result[3].lines[0], "Péngyǒu")
 
+    def test_bisect_recovers_correct_alignment_when_model_duplicates_adjacent_cue(self):
+        """AoT S1 ep16 symptom: the model duplicates cue 1 at cue 2 and drops cue 4,
+        keeping total count equal to 5 (len == len) while shifting cues 2..4 by +1.
+        Adjacent duplicate detection must reject the 5-item batch and bisect.
+        """
+        responses = {
+            5: {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                ["Feuer!", "Angriff!", "Angriff!", "Rückzug!", "Halten!"]
+                            ),
+                        }
+                    }
+                ]
+            },
+            # Left half (2 cues): translated correctly.
+            2: {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(["Feuer!", "Angriff!"]),
+                        }
+                    }
+                ]
+            },
+            # Right half (3 cues): translated correctly.
+            3: {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                ["Rückzug!", "Halten!", "Bewegen!"]
+                            ),
+                        }
+                    }
+                ]
+            },
+        }
+        with patch(
+            "ani_cli_sync.subtitles.urllib.request.urlopen",
+            side_effect=self._make_urlopen_mock(responses),
+        ):
+            result = translate_cues_llm(self.INPUT_CUES, target_lang="de")
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 5)
+        for got, orig in zip(result, self.INPUT_CUES):
+            self.assertEqual(got.timing, orig.timing)
+            self.assertEqual(got.identifier, orig.identifier)
+        self.assertEqual(result[0].lines, ["Feuer!"])
+        self.assertEqual(result[1].lines, ["Angriff!"])
+        self.assertEqual(result[2].lines, ["Rückzug!"])
+        self.assertEqual(result[3].lines, ["Halten!"])
+        self.assertEqual(result[4].lines, ["Bewegen!"])
+
+    def test_allows_legitimate_adjacent_identical_cues_in_source(self):
+        """When source cues genuinely repeat identical lines (e.g. 'Wait!' 'Wait!'),
+        the matching duplicate translations must be accepted without triggering bisect.
+        """
+        repeated_cues = [
+            VTTCue(identifier="1", timing="00:00.000 --> 00:01.000", lines=["Wait!"]),
+            VTTCue(identifier="2", timing="00:01.100 --> 00:02.000", lines=["Wait!"]),
+            VTTCue(identifier="3", timing="00:02.100 --> 00:03.000", lines=["Look!"]),
+        ]
+        responses = {
+            3: {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(["Warte!", "Warte!", "Schau!"]),
+                        }
+                    }
+                ]
+            }
+        }
+        with patch(
+            "ani_cli_sync.subtitles.urllib.request.urlopen",
+            side_effect=self._make_urlopen_mock(responses),
+        ):
+            result = translate_cues_llm(repeated_cues, target_lang="de")
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 3)
+        self.assertEqual(result[0].lines, ["Warte!"])
+        self.assertEqual(result[1].lines, ["Warte!"])
+        self.assertEqual(result[2].lines, ["Schau!"])
+
 
 class TestTranslationDefaults(unittest.TestCase):
     """The translation defaults are measured facts, not preferences.
@@ -876,6 +963,28 @@ class TestParseTranslationResponse(unittest.TestCase):
         content = json.dumps(["60% in vier Jahren.", "14 Meter hoch zu sein."])
         result = _parse_translation_response(content)
         self.assertEqual(result, [["60% in vier Jahren."], ["14 Meter hoch zu sein."]])
+
+    def test_parses_key_indexed_dict(self):
+        content = json.dumps({
+            "0": "Hallo Welt",
+            "1": "Zweite Zeile\nund dritte",
+        })
+        result = _parse_translation_response(content)
+        self.assertEqual(result, [["Hallo Welt"], ["Zweite Zeile", "und dritte"]])
+
+    def test_rejects_key_indexed_dict_with_missing_key(self):
+        content = json.dumps({
+            "0": "Hallo Welt",
+            "2": "Dritte Zeile",
+        })
+        self.assertIsNone(_parse_translation_response(content))
+
+    def test_rejects_key_indexed_dict_with_non_integer_keys(self):
+        content = json.dumps({
+            "first": "Hallo Welt",
+            "second": "Zweite Zeile",
+        })
+        self.assertIsNone(_parse_translation_response(content))
 
 
 if __name__ == "__main__":

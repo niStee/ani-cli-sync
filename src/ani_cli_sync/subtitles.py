@@ -255,8 +255,10 @@ def _build_translation_payload(
 
 
 def _parse_translation_response(content: str) -> list[list[str]] | None:
-    """Parse the model's JSON array response into per-cue text lines.
+    """Parse the model's JSON response into per-cue text lines.
 
+    Accepts either a JSON array of strings or a key-indexed JSON object
+    mapping contiguous string indices ("0", "1", ...) to strings.
     Strips an optional ```json ... ``` code fence. Returns None on any
     structural failure so the caller can decide what to do (retry, bisect,
     fall back to English).
@@ -270,16 +272,48 @@ def _parse_translation_response(content: str) -> list[list[str]] | None:
         data = json.loads(text)
     except json.JSONDecodeError:
         return None
-    if not isinstance(data, list):
+
+    if isinstance(data, dict):
+        try:
+            int_keys = {int(k): k for k in data}
+        except (ValueError, TypeError):
+            return None
+        n = len(data)
+        if set(int_keys) != set(range(n)):
+            return None
+        raw_entries = [data[int_keys[i]] for i in range(n)]
+    elif isinstance(data, list):
+        raw_entries = data
+    else:
         return None
+
     lines_per_cue: list[list[str]] = []
-    for entry in data:
+    for entry in raw_entries:
         if isinstance(entry, str):
             cleaned = [re.sub(r"^\d+:\s*", "", line) for line in entry.split("\n")]
             lines_per_cue.append(cleaned)
         else:
             return None
     return lines_per_cue
+
+
+def _has_hallucinated_duplicates(batch: list[VTTCue], parsed: list[list[str]]) -> bool:
+    """Detect adjacent duplicate translations when original source cues differed.
+
+    When an LLM duplicates a cue and drops another, overall batch length remains equal
+    to the source length, but the duplicate shifts all subsequent cues. If the source cues
+    genuinely repeated identical lines, the duplicate is legitimate and permitted.
+    """
+    if len(batch) != len(parsed):
+        return True
+    for i in range(1, len(batch)):
+        curr_trans = "\n".join(parsed[i]).strip()
+        prev_trans = "\n".join(parsed[i - 1]).strip()
+        curr_orig = "\n".join(batch[i].lines).strip()
+        prev_orig = "\n".join(batch[i - 1].lines).strip()
+        if curr_trans and curr_trans == prev_trans and curr_orig != prev_orig:
+            return True
+    return False
 
 
 def _translate_single_batch(
@@ -318,7 +352,11 @@ def _translate_single_batch(
                 res_data = json.loads(resp.read().decode("utf-8"))
                 content = res_data["choices"][0]["message"]["content"]
                 parsed = _parse_translation_response(content)
-                if parsed is not None and len(parsed) == len(batch):
+                if (
+                    parsed is not None
+                    and len(parsed) == len(batch)
+                    and not _has_hallucinated_duplicates(batch, parsed)
+                ):
                     return batch_idx, [
                         VTTCue(
                             identifier=orig.identifier,
@@ -327,9 +365,10 @@ def _translate_single_batch(
                         )
                         for orig, translated in zip(batch, parsed)
                     ]
-                # Length mismatch (or unparseable): bisect to find the cue(s) the
-                # model dropped/merged. A leaf of size 1-2 that still misaligns
-                # after exhausting the retry budget falls back to original text.
+                # Length mismatch, hallucinated duplicate, or unparseable: bisect to
+                # isolate the cue(s) the model corrupted/dropped. A leaf of size 1-2
+                # that still misaligns after exhausting the retry budget falls back to
+                # original text.
                 if len(batch) <= 2:
                     logger.warning(
                         "Batch %d cue(s) %s..%s mismatched after retry; falling back to original",
@@ -346,7 +385,9 @@ def _translate_single_batch(
                         for orig in batch
                     ]
                 mid = len(batch) // 2
-                logger.debug("Batch %d length mismatch; bisecting at %d", batch_idx, mid)
+                logger.debug(
+                    "Batch %d length mismatch or duplicate; bisecting at %d", batch_idx, mid
+                )
                 _, left = _translate_single_batch(
                     batch_idx, batch[:mid], endpoint, model, sys_prompt,
                     timeout=timeout, retries=retries,
