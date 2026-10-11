@@ -812,6 +812,115 @@ class TestTranslationReassemblyAfterModelDrift(unittest.TestCase):
         self.assertEqual(result[1].lines, ["Warte!"])
         self.assertEqual(result[2].lines, ["Schau!"])
 
+    def test_bisect_recovers_correct_alignment_when_model_echoes_untranslated_source_at_end(self):
+        """AoT S1 ep17 symptom: the model dropped cue 0, shifted cues 1..4 into slots 0..3,
+        and padded slot 4 with the original English source text of cue 4 to make len == 5.
+        Untranslated echo detection must reject the batch and bisect.
+        """
+        cues = [
+            VTTCue(identifier="1", timing="00:00.000 --> 00:01.000", lines=["What are you suggesting?"]),
+            VTTCue(identifier="2", timing="00:01.000 --> 00:02.000", lines=["We can distract her."]),
+            VTTCue(identifier="3", timing="00:02.000 --> 00:03.000", lines=["Buy some time."]),
+            VTTCue(identifier="4", timing="00:03.000 --> 00:04.000", lines=["She is smart."]),
+            VTTCue(identifier="5", timing="00:04.000 --> 00:05.000", lines=["There is no escape now!"]),
+        ]
+        responses = {
+            5: {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps([
+                                "Wir können sie ablenken.",
+                                "Zeit gewinnen.",
+                                "Sie ist klug.",
+                                "Jetzt gibt es kein Entkommen!",
+                                "There is no escape now!",
+                            ]),
+                        }
+                    }
+                ]
+            },
+            2: {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps([
+                                "Was schlägst du vor?",
+                                "Wir können sie ablenken.",
+                            ]),
+                        }
+                    }
+                ]
+            },
+            3: {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps([
+                                "Zeit gewinnen.",
+                                "Sie ist klug.",
+                                "Jetzt gibt es kein Entkommen!",
+                            ]),
+                        }
+                    }
+                ]
+            },
+        }
+        with patch(
+            "ani_cli_sync.subtitles.urllib.request.urlopen",
+            side_effect=self._make_urlopen_mock(responses),
+        ):
+            result = translate_cues_llm(cues, target_lang="de")
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 5)
+        self.assertEqual(result[0].lines, ["Was schlägst du vor?"])
+        self.assertEqual(result[1].lines, ["Wir können sie ablenken."])
+        self.assertEqual(result[2].lines, ["Zeit gewinnen."])
+        self.assertEqual(result[3].lines, ["Sie ist klug."])
+        self.assertEqual(result[4].lines, ["Jetzt gibt es kein Entkommen!"])
+
+    def test_bisect_recovers_correct_alignment_when_named_entity_anchor_shifts_to_neighbor(self):
+        """AoT S1 ep17 symptom: 'Armin' in cue 2 shifted to cue 1 because cue 0 was dropped.
+        When a capitalized named entity anchor appears in an adjacent cue rather than its
+        matching cue, anchor shift detection must reject the batch and bisect.
+        """
+        cues = [
+            VTTCue(identifier="1", timing="00:00.000 --> 00:01.000", lines=["What did you say?"]),
+            VTTCue(identifier="2", timing="00:01.000 --> 00:02.000", lines=["Here hoping for luck."]),
+            VTTCue(identifier="3", timing="00:02.000 --> 00:03.000", lines=["Armin..."]),
+            VTTCue(identifier="4", timing="00:03.000 --> 00:04.000", lines=["You always clung to Eren."]),
+        ]
+
+        def mock_bisect(req, timeout=None):
+            body = json.loads(req.data.decode("utf-8"))
+            user_content = body["messages"][1]["content"]
+            lines = [line for line in user_content.split("\n") if line]
+            if len(lines) == 4:
+                content = [
+                    "Hoffen wir auf Glück.",
+                    "Armin...",
+                    "Du hast dich immer an Eren geklammert.",
+                    "Danke sehr.",
+                ]
+            elif "Armin" in user_content:
+                content = ["Armin...", "Du hast dich immer an Eren geklammert."]
+            else:
+                content = ["Was hast du gesagt?", "Hoffen wir auf Glück."]
+            resp = MagicMock()
+            resp.read.return_value = json.dumps({"choices": [{"message": {"content": json.dumps(content)}}]}).encode("utf-8")
+            resp.__enter__.return_value = resp
+            return resp
+
+        with patch("ani_cli_sync.subtitles.urllib.request.urlopen", side_effect=mock_bisect):
+            result = translate_cues_llm(cues, target_lang="de")
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 4)
+        self.assertEqual(result[0].lines, ["Was hast du gesagt?"])
+        self.assertEqual(result[1].lines, ["Hoffen wir auf Glück."])
+        self.assertEqual(result[2].lines, ["Armin..."])
+        self.assertEqual(result[3].lines, ["Du hast dich immer an Eren geklammert."])
+
+
 
 class TestTranslationDefaults(unittest.TestCase):
     """The translation defaults are measured facts, not preferences.

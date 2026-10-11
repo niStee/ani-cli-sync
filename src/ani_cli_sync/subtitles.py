@@ -316,6 +316,60 @@ def _has_hallucinated_duplicates(batch: list[VTTCue], parsed: list[list[str]]) -
     return False
 
 
+def _has_untranslated_echo(
+    batch: list[VTTCue],
+    parsed: list[list[str]],
+    target_lang: str = "de",
+) -> bool:
+    """Detect if any cue was padded with an untranslated multi-word English source line."""
+    if target_lang == "en" or len(batch) != len(parsed):
+        return False
+    for orig, trans in zip(batch, parsed):
+        orig_text = " ".join(orig.lines).strip()
+        trans_text = " ".join(trans).strip()
+        if len(orig_text.split()) >= 3 and orig_text.lower() == trans_text.lower():
+            return True
+    return False
+
+
+def _extract_anchors(lines: list[str]) -> set[str]:
+    """Extract candidate entity anchors (proper nouns / capitalized names) from cue lines."""
+    anchors = set()
+    for line in lines:
+        clean = re.sub(r"<[^>]+>", "", line)
+        words = re.findall(r"\b[A-Z][a-zA-Z]{2,}\b", clean)
+        for w in words:
+            anchors.add(w.lower())
+    return anchors
+
+
+def _has_anchor_phase_shift(batch: list[VTTCue], parsed: list[list[str]]) -> bool:
+    """Detect if a distinctive entity anchor jumped to an adjacent neighbor cue."""
+    if len(batch) != len(parsed):
+        return True
+    n = len(batch)
+    for i in range(n):
+        orig_anchors = _extract_anchors(batch[i].lines)
+        if not orig_anchors:
+            continue
+        trans_anchors = _extract_anchors(parsed[i])
+
+        if i > 0:
+            prev_orig = _extract_anchors(batch[i - 1].lines)
+            prev_trans = _extract_anchors(parsed[i - 1])
+            for a in orig_anchors:
+                if a not in prev_orig and a in prev_trans and a not in trans_anchors:
+                    return True
+
+        if i < n - 1:
+            next_orig = _extract_anchors(batch[i + 1].lines)
+            next_trans = _extract_anchors(parsed[i + 1])
+            for a in orig_anchors:
+                if a not in next_orig and a in next_trans and a not in trans_anchors:
+                    return True
+    return False
+
+
 def _translate_single_batch(
     batch_idx: int,
     batch: list[VTTCue],
@@ -327,8 +381,8 @@ def _translate_single_batch(
 ) -> tuple[int, list[VTTCue] | None]:
     """Translate an individual batch of cues with retries.
 
-    Text-only payload (no timestamps); the response is a JSON array of strings
-    in input order. Length mismatches trigger a bisect into smaller sub-batches
+    Text-only payload (no timestamps); the response is a JSON array or object
+    in input order. Mismatches trigger a bisect into smaller sub-batches
     until the mismatched cue can be isolated; a single cue that still misaligns
     after the retry budget falls back to its original English lines so timings
     are never shifted.
@@ -337,6 +391,7 @@ def _translate_single_batch(
     if parsed_ep.scheme not in ("http", "https") or not parsed_ep.netloc:
         raise ValueError(f"Unsupported or insecure endpoint: {endpoint}")
 
+    target_lang = "de" if ("German" in sys_prompt or "de" in sys_prompt) else "other"
     data = _build_translation_payload(model, sys_prompt, batch)
 
     for attempt in range(retries):
@@ -356,6 +411,8 @@ def _translate_single_batch(
                     parsed is not None
                     and len(parsed) == len(batch)
                     and not _has_hallucinated_duplicates(batch, parsed)
+                    and not _has_untranslated_echo(batch, parsed, target_lang=target_lang)
+                    and not _has_anchor_phase_shift(batch, parsed)
                 ):
                     return batch_idx, [
                         VTTCue(
@@ -432,8 +489,9 @@ def translate_cues_llm(
             "You are an expert anime subtitle translator. Translate the following English anime subtitle "
             "cues into natural, authentic German dialogue (Deutsche Synchron-/Untertitel-Konventionen). "
             "Maintain all HTML tags (such as <b>, <i>). The user message is a numbered list of cues "
-            "in the form 'i: text'. Return ONLY a JSON array of exactly the same number of strings, "
-            "in the same order. Entry i is the German translation of cue i, with no cue numbers and no commentary."
+            "in the form 'i: text'. Return ONLY a JSON object mapping each cue index to its translation "
+            "(e.g. {\"0\": \"...\", \"1\": \"...\"}). Every requested index must be present, with no "
+            "missing indices, no commentary, and no markdown fences."
         )
     elif target_lang == "zh-pinyin":
         sys_prompt = (
@@ -442,9 +500,9 @@ def translate_cues_llm(
             "Line 1: Accurate Hanyu Pinyin with tone marks (e.g. Wǒ míngbái le, Lìmǔlǔ dàrén.)\n"
             "Line 2: Traditional Chinese characters (繁體中文, e.g. 我明白了，利姆路大人。)\n"
             "Maintain all HTML tags (such as <b>, <i>). The user message is a numbered list of cues "
-            "in the form 'i: text'. Return ONLY a JSON array of exactly the same number of strings, "
-            "in the same order. Entry i is cue i's two-line translation joined with a newline, "
-            "with no cue numbers and no commentary."
+            "in the form 'i: text'. Return ONLY a JSON object mapping each cue index to its two-line translation "
+            "joined with a newline (e.g. {\"0\": \"...\", \"1\": \"...\"}). Every requested index must be present, "
+            "with no missing indices, no commentary, and no markdown fences."
         )
     else:
         return None

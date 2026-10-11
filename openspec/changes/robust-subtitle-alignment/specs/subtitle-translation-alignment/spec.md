@@ -37,3 +37,20 @@ When recursive bisection reaches an indivisible leaf batch that continues to fai
 #### Scenario: Leaf failure fallback
 - **WHEN** an indivisible leaf cue batch fails translation alignment after all bisection and retry attempts
 - **THEN** the pipeline retains the original source text for those cues and preserves their exact timestamps without shifting subsequent dialogue
+
+### Requirement: Reject Untranslated English Echoes
+
+The translation pipeline SHALL reject any translated cue batch where a target non-English cue echoes a multi-word source dialogue line verbatim while neighboring cues are translated.
+
+#### Scenario: Untranslated source echo rejection
+- **WHEN** a translation batch into German contains a multi-word cue identical to its source English text while previous cues in the batch are translated
+- **THEN** the pipeline rejects the batch response and initiates recursive bisection
+
+### Requirement: Reject Named Entity Phase Shifts
+
+The translation pipeline SHALL reject any translated cue batch where a capitalized entity anchor present in a source cue appears shifted into an adjacent translated cue.
+
+#### Scenario: Entity anchor shift rejection
+- **WHEN** a source cue contains a distinct capitalized entity anchor that is absent in its translated cue but present in the adjacent translated cue
+- **THEN** the pipeline rejects the batch response and initiates recursive bisection
+

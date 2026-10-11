@@ -17,3 +17,13 @@
 - [x] 3.1 Run full unit test suite via `PYTHONPATH=src python3 -m unittest discover -s tests` and verify all tests pass
 - [x] 3.2 Run `python3 scripts/ruff_count_ratchet.py` and verify ruff count matches baseline (18) with no new lint errors
 - [x] 3.3 Validate OpenSpec change completeness via `mise exec -- openspec validate robust-subtitle-alignment`
+
+## 4. Deterministic Alignment & Cache Integrity Guards
+
+- [x] 4.1 Add failing unit test in `tests/test_subtitles.py` for untranslated source echo rejection (padded cue echoing multi-word English line in German output)
+- [x] 4.2 Add failing unit test in `tests/test_subtitles.py` for named entity anchor phase shift rejection (anchor jumping to adjacent cue)
+- [x] 4.3 Update system prompt to explicitly request key-indexed JSON object `{"0": "...", "1": "..."}` and verify payload tests
+- [x] 4.4 Implement `_has_untranslated_echo` and `_has_anchor_phase_shift` in `src/ani_cli_sync/subtitles.py`
+- [x] 4.5 Run ADR-012 sensitivity probes on echo and anchor shift guards
+- [x] 4.6 Audit and sanitize cached subtitles in `~/.cache/ani-cli/subtitles/` for AoT episodes 18–20
+
