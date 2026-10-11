@@ -1,0 +1,5 @@
+# Project-local tools for the spec-driven development pilot (OpenSpec).
+# Pinned here rather than in the global, chezmoi-managed mise config until the
+# pilot is evaluated; promote to ai-infra's config.toml.tmpl if it is adopted.
+[tools]
+"npm:@fission-ai/openspec" = "1.14.1"

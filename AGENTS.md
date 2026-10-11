@@ -268,6 +268,19 @@ Divide the scraper ep by the offset to find the correct AniList ep (see offset t
 **If the show was accidentally marked COMPLETED**, use `set` at the correct episode — it will
 re-open it as `CURRENT` as long as `ep < total`.
 
+## Spec-driven development (pilot)
+
+Behavior changes are specified before they are built, with OpenSpec (pinned in
+`mise.toml`; run `openspec` from this repository). Start with the propose
+workflow (`/opsx:propose` in Claude Code, `$openspec-propose` in Codex,
+`/opsx-propose` in OpenCode), get the proposal reviewed, then apply it.
+`openspec/specs/` is the current, agreed behavior; `openspec/changes/` holds
+proposals in flight. The project rules every proposal must follow (tests from
+scenarios, positive/negative pairs with sensitivity probes, when a proposal is
+needed, ADRs) live in `openspec/config.yaml`. Plans in issue comments are not the
+spec: if an issue and `openspec/specs/` disagree, the spec wins until a reviewed
+change says otherwise.
+
 ## Repository topology
 - canonical: GitHub (niStee/ani-cli-sync) — all changes land via PR to main
 - mirror: Codeberg (codeberg.org/niStee/ani-cli-sync) — automated push mirror via
