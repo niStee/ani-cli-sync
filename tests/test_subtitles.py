@@ -221,6 +221,19 @@ class TestMPVCommandBuilder(unittest.TestCase):
         cmd = build_mpv_command(info, plan, "AoT", 1)
         self.assertFalse(any(a.startswith("--sub-delay") for a in cmd))
 
+    def test_build_mpv_command_omits_secondary_sid_when_zero(self):
+        info = StreamInfo(
+            video_link="https://stream.example/1080/index.m3u8",
+            referrer="https://zokoanime.video/",
+            subtitles=[],
+        )
+        plan = SubtitlePlan(sub_files=["/cache/de.vtt", "/cache/en.vtt"], sid=1, secondary_sid=0)
+        cmd = build_mpv_command(info, plan, "AoT", 1)
+        self.assertIn("--sub-file=/cache/de.vtt", cmd)
+        self.assertIn("--sub-file=/cache/en.vtt", cmd)
+        self.assertIn("--sid=1", cmd)
+        self.assertFalse(any(a.startswith("--secondary-sid") for a in cmd))
+
     def test_build_mpv_command_applies_negative_sub_delay(self):
         info = StreamInfo(
             video_link="https://stream.example/1080/index.m3u8",
@@ -397,9 +410,37 @@ class TestSubtitleTranslationAndPlanning(unittest.TestCase):
             # German translated once, Chinese never translated
             self.assertEqual(mock_translate.call_count, 1)
             self.assertEqual(mock_translate.call_args[1]["target_lang"], "de")
-            # Secondary track falls back to stream English
+            # Secondary track falls back to stream English and is attached as track 2,
+            # but inactive on startup (secondary_sid=0) so it only opens on demand (Ctrl+j).
             self.assertEqual(len(plan.sub_files), 2)
             self.assertEqual(plan.sub_files[1], "https://stream.example/en.vtt")
+            self.assertEqual(plan.sid, 1)
+            self.assertEqual(plan.secondary_sid, 0)
+
+    @patch("ani_cli_sync.subtitles.translate_cues_llm")
+    @patch("ani_cli_sync.subtitles.fetch_vtt_text")
+    def test_prepare_subtitles_explicit_secondary_activates_secondary_sid(self, mock_fetch, mock_translate):
+        with tempfile.TemporaryDirectory() as td:
+            tmp_dir = Path(td)
+            mock_fetch.return_value = SAMPLE_VTT
+            mock_translate.return_value = parse_vtt(SAMPLE_VTT)
+
+            info = StreamInfo(
+                video_link="https://stream.example/1080/index.m3u8",
+                referrer="https://zokoanime.video/",
+                subtitles=[{"lang": "en", "label": "English (CR)", "src": "https://stream.example/en.vtt"}],
+            )
+
+            plan = prepare_subtitles(
+                info,
+                "slime",
+                15,
+                primary_lang="de",
+                secondary_lang="en",
+                cache_dir=tmp_dir,
+            )
+
+            self.assertEqual(len(plan.sub_files), 2)
             self.assertEqual(plan.sid, 1)
             self.assertEqual(plan.secondary_sid, 2)
 

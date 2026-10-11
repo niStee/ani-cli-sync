@@ -502,7 +502,8 @@ def prepare_subtitles(
     2. Inspects stream tracks: if stream has full primary (cue_count >= 50), uses it.
     3. If primary is missing/forced, translates using base English track.
     4. If secondary_lang is explicitly requested and missing, translates on demand.
-    5. If secondary_lang is None and stream has English, attaches English as secondary (0s delay).
+    5. If secondary_lang is None and stream has English, attaches English as secondary track
+       for on-demand toggle (e.g. mpv Ctrl+j) with secondary_sid=0 (inactive on startup).
     6. Caches all generated files and returns an MPV SubtitlePlan.
     """
     if cache_dir is None:
@@ -586,7 +587,7 @@ def prepare_subtitles(
 
     sub_files: list[str] = []
     sid = 1
-    secondary_sid = 2
+    secondary_sid = 2 if secondary_lang is not None else 0
 
     if primary_file:
         sub_files.append(primary_file)
