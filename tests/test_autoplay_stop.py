@@ -7,7 +7,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from ani_cli_sync.cli import _should_advance
+from ani_cli_sync.cli import _calculate_skip_seconds, _should_advance
 
 
 class TestAutoplayStopSemantics(unittest.TestCase):
@@ -47,25 +47,46 @@ class TestAutoplayStopSemantics(unittest.TestCase):
         self.assertTrue(advance, reason)
 
     def test_near_end_playback_advances(self):
-        # A skipped intro means elapsed sits a little under duration; 90% is the floor.
+        # A skipped intro means elapsed sits a little under duration.
         advance, _ = _should_advance(0, 1440.0 * 0.90, self.DURATION)
         self.assertTrue(advance)
 
-    def test_just_under_threshold_does_not_advance(self):
+    def test_eighty_percent_playback_without_skip_metadata_advances(self):
+        # Manual OP/ED skip: 1260s of a 1440s episode (87.5%) or 80% baseline advances.
         advance, _ = _should_advance(0, 1440.0 * 0.80, self.DURATION)
+        self.assertTrue(advance)
+
+    def test_just_under_threshold_does_not_advance(self):
+        # Stopping early at 70% (16.8 minutes into 24m) must halt autoplay.
+        advance, _ = _should_advance(0, 1440.0 * 0.70, self.DURATION)
         self.assertFalse(advance)
 
+    def test_skip_aware_playback_advances_when_intro_and_outro_skipped(self):
+        # AoT S1 ep18 real scenario: 1463.5s total, 176s skipped via ani-skip, 1308s elapsed.
+        # Under the old static 90% threshold (1317s), this falsely stopped.
+        # With effective duration (1463.5 - 176 = 1287.5s), 1308s safely advances.
+        advance, reason = _should_advance(0, 1308.0, 1463.5, skip_seconds=176.0)
+        self.assertTrue(advance, reason)
+
     def test_unknown_duration_falls_back_to_conservative_threshold(self):
-        # Duration unavailable: require a full-length episode's worth of playback
-        # rather than the old flat 600s, which a 24-minute episode passes mid-watch.
+        # Duration unavailable: require a full episode minus skipped OP/ED (1150s),
+        # rejecting early quit at 10 minutes (660s).
         advance, _ = _should_advance(0, 660.0, None)
         self.assertFalse(advance)
-        advance, _ = _should_advance(0, 1400.0, None)
+        advance, _ = _should_advance(0, 1150.0, None)
         self.assertTrue(advance)
 
     def test_unknown_duration_nonzero_exit_still_stops(self):
         advance, _ = _should_advance(2, 1500.0, None)
         self.assertFalse(advance)
+
+    def test_calculate_skip_seconds_sums_intro_and_outro(self):
+        class MockStreamInfo:
+            intro_skip = (128.0, 215.0)  # 87s
+            outro_skip = (1359.0, 1448.0)  # 89s
+
+        self.assertEqual(_calculate_skip_seconds(MockStreamInfo()), 176.0)
+        self.assertEqual(_calculate_skip_seconds(None), 0.0)
 
 
 if __name__ == "__main__":

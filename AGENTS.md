@@ -105,13 +105,16 @@ played through**. Closing the player window must always stop the chain, never sk
 | mpv exit | elapsed watch time | outcome |
 |---|---|---|
 | non-zero | any | **stop** - treated as the user closing the player |
-| 0 | `>= 90%` of probed duration | advance |
+| 0 | `>= 85%` of effective duration (`duration - skip_seconds`) when skips present | advance |
+| 0 | `>= 80%` of probed duration when skips absent | advance |
 | 0 | otherwise (user closed early) | **stop** |
-| 0 | duration unknown | advance only at `>= 1400s` |
+| 0 | duration unknown | advance only at `>= 1150s - skip_seconds` |
 
-The duration is summed from the HLS media playlist (`#EXTINF`). This is an optimisation only:
-when the probe fails, or in the `no_sub_fallback` path where no stream info is resolved at
-all, the conservative full-episode fallback applies.
+The duration is summed from the HLS media playlist (`#EXTINF`). When automated intro/outro
+skips occur (`ani-skip`), `skip_seconds` is subtracted so an episode with skipped OP (~90s)
+and ED (~90s) is not falsely classified as an early quit. Without skip metadata, an 80%
+baseline (matching PlexTraktSync and Trakt standards) allows manual skips without stalling.
+When probing fails or in the `no_sub_fallback` path, the 1150s fallback (~19.2 minutes) applies.
 
 **Why the previous logic was wrong.** It advanced on any non-zero exit (so closing mpv
 skipped the episode) and treated any zero exit past a flat `600s` threshold as "finished",
