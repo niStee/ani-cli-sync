@@ -275,7 +275,8 @@ def _parse_translation_response(content: str) -> list[list[str]] | None:
     lines_per_cue: list[list[str]] = []
     for entry in data:
         if isinstance(entry, str):
-            lines_per_cue.append(entry.split("\n"))
+            cleaned = [re.sub(r"^\d+:\s*", "", line) for line in entry.split("\n")]
+            lines_per_cue.append(cleaned)
         else:
             return None
     return lines_per_cue

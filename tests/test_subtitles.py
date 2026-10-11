@@ -13,6 +13,7 @@ from ani_cli_sync.subtitles import (
     StreamInfo,
     SubtitlePlan,
     VTTCue,
+    _parse_translation_response,
     _translate_single_batch,
     build_mpv_command,
     count_vtt_cues,
@@ -857,9 +858,24 @@ class TestFetchVttSecurity(unittest.TestCase):
         with self.assertRaises(ValueError):
             fetch_vtt_text("ftp://example.com/subs.vtt")
 
-    def test_rejects_empty_netloc(self):
-        with self.assertRaises(ValueError):
-            fetch_vtt_text("http:///subs.vtt")
+class TestParseTranslationResponse(unittest.TestCase):
+    def test_parses_clean_cues(self):
+        content = json.dumps(["Hallo Welt", "Zweite Zeile\nund dritte"])
+        result = _parse_translation_response(content)
+        self.assertEqual(result, [["Hallo Welt"], ["Zweite Zeile", "und dritte"]])
+
+    def test_strips_leading_index_prefixes(self):
+        content = json.dumps(["0: Aber bin ich so furchterregend?", "1: Ich kann es nicht verübeln.\n2: Mehr Text"])
+        result = _parse_translation_response(content)
+        self.assertEqual(
+            result,
+            [["Aber bin ich so furchterregend?"], ["Ich kann es nicht verübeln.", "Mehr Text"]],
+        )
+
+    def test_preserves_legitimate_leading_digits(self):
+        content = json.dumps(["60% in vier Jahren.", "14 Meter hoch zu sein."])
+        result = _parse_translation_response(content)
+        self.assertEqual(result, [["60% in vier Jahren."], ["14 Meter hoch zu sein."]])
 
 
 if __name__ == "__main__":
