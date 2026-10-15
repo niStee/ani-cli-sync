@@ -1706,20 +1706,26 @@ class TestSeriesContextAndGlossary(unittest.TestCase):
         self.assertEqual(glossary["Survey Corps"], "Aufklärungstrupp")
 
     def test_build_translation_payload_includes_character_profiles(self):
+        from ani_cli_sync.metadata import CharacterProfile
         from ani_cli_sync.subtitles import VTTCue, _build_translation_payload
 
         cues = [VTTCue("1", "00:00:01.000 --> 00:00:03.000", ["Armin, watch out!"])]
+        active_chars = [
+            CharacterProfile("Armin Arlert", "male", "MAIN"),
+            CharacterProfile("Eren Yeager", "male", "MAIN"),
+        ]
         payload_bytes = _build_translation_payload(
             "minimax-m3",
             "Base prompt",
             cues,
             anime_title="shingeki no kyojin season 3",
+            active_characters=active_chars,
         )
         payload = json.loads(payload_bytes.decode("utf-8"))
         sys_msg = payload["messages"][0]["content"]
         self.assertIn("Key Character Profiles", sys_msg)
-        self.assertIn("Armin (male)", sys_msg)
-        self.assertIn("Eren (male)", sys_msg)
+        self.assertIn("Armin Arlert (male)", sys_msg)
+        self.assertIn("Eren Yeager (male)", sys_msg)
 
     def test_german_translation_prompt_contains_cleft_avoidance(self):
         from ani_cli_sync.subtitles import VTTCue, translate_cues_llm

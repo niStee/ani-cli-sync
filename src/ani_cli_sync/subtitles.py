@@ -28,6 +28,12 @@ from pathlib import Path
 from typing import Any
 
 from ani_cli_sync.menu import prepare_menu_env
+from ani_cli_sync.metadata import (
+    CharacterProfile,
+    SeriesMetadata,
+    extract_active_characters,
+    resolve_series_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -347,12 +353,6 @@ BUILTIN_SERIES_ALIASES: dict[str, str] = {
     "jjk": "jujutsu kaisen",
 }
 
-BUILTIN_SERIES_CHARACTERS: dict[str, str] = {
-    "attack on titan": "Eren (male), Armin (male), Levi (male), Jean (male), Erwin (male), Kenny (male), Reiner (male), Bertholdt (male), Mikasa (female), Historia (female), Hange (female/they).",
-    "that time i got reincarnated as a slime": "Rimuru (genderless/he/they), Veldora (male), Benimaru (male), Shion (female), Shuna (female), Milim (female), Diablo (male), Guy Crimson (male).",
-    "sousou no frieren": "Frieren (female), Fern (female), Stark (male), Himmel (male), Heiter (male), Eisen (male), Flamme (female), Serie (female).",
-}
-
 
 def resolve_canonical_series_key(anime_title: str) -> str:
     """Normalize anime title using built-in aliases (e.g. Romaji to English canonical)."""
@@ -428,6 +428,7 @@ def _build_translation_payload(
     cues: list[VTTCue],
     anime_title: str | None = None,
     active_glossary: dict[str, str] | None = None,
+    active_characters: list[CharacterProfile] | None = None,
 ) -> bytes:
     """Build the JSON request body for a translation call.
 
@@ -438,12 +439,11 @@ def _build_translation_payload(
     prompt_parts = [sys_prompt]
     if anime_title:
         prompt_parts.append(f'Anime series: "{anime_title}".')
-        canonical_key = resolve_canonical_series_key(anime_title)
-        char_roster = BUILTIN_SERIES_CHARACTERS.get(canonical_key)
-        if char_roster:
-            prompt_parts.append(
-                f"Key Character Profiles (grammatical reference for pronouns/gender): {char_roster}"
-            )
+    if active_characters:
+        char_cards = ", ".join(c.format_card() for c in active_characters)
+        prompt_parts.append(
+            f"Key Character Profiles (grammatical reference for pronouns/gender): {char_cards}."
+        )
     if active_glossary:
         glossary_items = ", ".join(
             f'"{k}": "{v}"' for k, v in sorted(active_glossary.items())
@@ -595,6 +595,7 @@ def _translate_single_batch(
     retries: int = 1,
     anime_title: str | None = None,
     series_glossary: dict[str, str] | None = None,
+    characters: list[CharacterProfile] | None = None,
 ) -> tuple[int, list[VTTCue] | None]:
     """Translate an individual batch of cues with retries.
 
@@ -612,12 +613,14 @@ def _translate_single_batch(
     active_glossary = (
         extract_active_glossary(batch, series_glossary) if series_glossary else None
     )
+    active_chars = extract_active_characters(batch, characters) if characters else None
     data = _build_translation_payload(
         model,
         sys_prompt,
         batch,
         anime_title=anime_title,
         active_glossary=active_glossary,
+        active_characters=active_chars,
     )
 
     for attempt in range(retries):
@@ -688,6 +691,7 @@ def _translate_single_batch(
                     retries=retries,
                     anime_title=anime_title,
                     series_glossary=series_glossary,
+                    characters=characters,
                 )
                 if left is None:
                     return batch_idx, None
@@ -701,6 +705,7 @@ def _translate_single_batch(
                     retries=retries,
                     anime_title=anime_title,
                     series_glossary=series_glossary,
+                    characters=characters,
                 )
                 if right is None:
                     return batch_idx, None
@@ -744,6 +749,8 @@ def translate_cues_llm(
     batch_size: int = 50,
     max_workers: int = 5,
     anime_title: str | None = None,
+    series_metadata: SeriesMetadata | None = None,
+    characters: list[CharacterProfile] | None = None,
 ) -> list[VTTCue] | None:
     """
     Translate cues via local LiteLLM proxy concurrently across worker threads with tiered failover.
@@ -782,6 +789,13 @@ def translate_cues_llm(
     else:
         return None
 
+    if series_metadata is None and anime_title:
+        series_metadata = resolve_series_metadata(title=anime_title)
+
+    resolved_characters = characters
+    if resolved_characters is None and series_metadata:
+        resolved_characters = series_metadata.characters
+
     series_glossary = get_series_glossary(anime_title, target_lang)
     endpoint = f"{api_base.rstrip('/')}/chat/completions"
     batches = [cues[i : i + batch_size] for i in range(0, len(cues), batch_size)]
@@ -804,6 +818,7 @@ def translate_cues_llm(
                 sys_prompt,
                 anime_title=anime_title,
                 series_glossary=series_glossary,
+                characters=resolved_characters,
             )
             for idx, b in enumerate(batches)
         ]
@@ -851,6 +866,7 @@ def prepare_subtitles(
     cache_dir: Path | None = None,
     api_base: str = DEFAULT_API_BASE,
     model: str | None = None,
+    series_metadata: SeriesMetadata | None = None,
 ) -> SubtitlePlan:
     """
     Prepare and validate subtitle tracks.
@@ -940,6 +956,7 @@ def prepare_subtitles(
                     api_base=api_base,
                     model=model,
                     anime_title=anime_title,
+                    series_metadata=series_metadata,
                 )
                 if translated_de:
                     primary_cache_path.write_text(
@@ -954,6 +971,7 @@ def prepare_subtitles(
                     api_base=api_base,
                     model=model,
                     anime_title=anime_title,
+                    series_metadata=series_metadata,
                 )
                 if translated_sec:
                     secondary_cache_path.write_text(
