@@ -294,10 +294,100 @@ def fetch_vtt_text(url: str, timeout: int = 30, referrer: str | None = None) -> 
         return resp.read().decode("utf-8", errors="replace")
 
 
+BUILTIN_SERIES_GLOSSARIES: dict[str, dict[str, dict[str, str]]] = {
+    "attack on titan": {
+        "de": {
+            "ODM gear": "3D-Manöver-Apparat",
+            "Omni-Directional Mobility gear": "3D-Manöver-Apparat",
+            "Survey Corps": "Aufklärungstrupp",
+            "Scout Regiment": "Aufklärungstrupp",
+            "Scouts": "Aufklärungstrupp",
+            "Garrison": "Mauergarnison",
+            "Garrison Regiment": "Mauergarnison",
+            "Military Police": "Militärpolizei",
+            "Military Police Brigade": "Militärpolizei",
+            "Colossal Titan": "Kolossaler Titan",
+            "Armored Titan": "Gepanzerter Titan",
+            "Beast Titan": "Tiertitan",
+            "Attack Titan": "Attackierender Titan",
+            "Founding Titan": "Urvater-Titan",
+            "Female Titan": "Weiblicher Titan",
+            "Jaw Titan": "Kiefer-Titan",
+            "Cart Titan": "Karren-Titan",
+            "War Hammer Titan": "Kriegshammer-Titan",
+            "Wall Maria": "Mauer Maria",
+            "Wall Rose": "Mauer Rose",
+            "Wall Sina": "Mauer Sina",
+            "Eldia": "Eldia",
+            "Eldian": "Eldier",
+            "Marley": "Marley",
+            "Marleyan": "Marleyer",
+            "Commander": "Kommandant",
+            "Captain": "Hauptgefreiter",
+        }
+    }
+}
+
+
+def get_series_glossary(anime_title: str | None, target_lang: str) -> dict[str, str]:
+    """Resolve terminology glossary for an anime series and target language."""
+    if not anime_title:
+        return {}
+
+    title_lower = anime_title.lower()
+    resolved: dict[str, str] = {}
+
+    # 1. Match built-in series
+    for series_key, lang_map in BUILTIN_SERIES_GLOSSARIES.items():
+        if series_key in title_lower or title_lower in series_key:
+            resolved.update(lang_map.get(target_lang, {}))
+            break
+
+    # 2. Check user config file ~/.config/ani-cli/glossary.json (XDG_CONFIG_HOME)
+    config_base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    user_glossary_file = config_base / "ani-cli" / "glossary.json"
+    if user_glossary_file.is_file():
+        try:
+            data = json.loads(user_glossary_file.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                for series_key, lang_map in data.items():
+                    if isinstance(lang_map, dict) and (
+                        series_key.lower() in title_lower
+                        or title_lower in series_key.lower()
+                    ):
+                        resolved.update(lang_map.get(target_lang, {}))
+                        break
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.debug(
+                "Failed to read user glossary from %s: %s", user_glossary_file, exc
+            )
+
+    return resolved
+
+
+def extract_active_glossary(
+    cues: list[VTTCue], glossary: dict[str, str]
+) -> dict[str, str]:
+    """Filter glossary to only include terms present in the current cue batch."""
+    if not glossary or not cues:
+        return {}
+
+    batch_text = " ".join(" ".join(c.lines) for c in cues)
+    active: dict[str, str] = {}
+    for term, translation in glossary.items():
+        pattern = r"\b" + re.escape(term) + r"\b"
+        if re.search(pattern, batch_text, re.IGNORECASE):
+            active[term] = translation
+
+    return active
+
+
 def _build_translation_payload(
     model: str,
     sys_prompt: str,
     cues: list[VTTCue],
+    anime_title: str | None = None,
+    active_glossary: dict[str, str] | None = None,
 ) -> bytes:
     """Build the JSON request body for a translation call.
 
@@ -305,12 +395,25 @@ def _build_translation_payload(
     stripped so the model can never echo a shifted timing, and re-attachment
     happens client-side from the original batch.
     """
+    prompt_parts = [sys_prompt]
+    if anime_title:
+        prompt_parts.append(f'Anime series: "{anime_title}".')
+    if active_glossary:
+        glossary_items = ", ".join(
+            f'"{k}": "{v}"' for k, v in sorted(active_glossary.items())
+        )
+        prompt_parts.append(
+            f"Active Terminology Glossary: {{{glossary_items}}}.\n"
+            "Strictly adhere to this glossary, inflecting grammatically as required for natural dialogue (e.g. case declension)."
+        )
+    effective_prompt = "\n\n".join(prompt_parts)
+
     numbered = [f"{i}: {chr(10).join(cue.lines)}" for i, cue in enumerate(cues)]
     user_content = "\n".join(numbered)
     req_body = {
         "model": model,
         "messages": [
-            {"role": "system", "content": sys_prompt},
+            {"role": "system", "content": effective_prompt},
             {"role": "user", "content": user_content},
         ],
         "temperature": 0.1,
@@ -442,6 +545,8 @@ def _translate_single_batch(
     sys_prompt: str,
     timeout: int = 45,
     retries: int = 1,
+    anime_title: str | None = None,
+    series_glossary: dict[str, str] | None = None,
 ) -> tuple[int, list[VTTCue] | None]:
     """Translate an individual batch of cues with retries.
 
@@ -456,7 +561,16 @@ def _translate_single_batch(
         raise ValueError(f"Unsupported or insecure endpoint: {endpoint}")
 
     target_lang = "de" if ("German" in sys_prompt or "de" in sys_prompt) else "other"
-    data = _build_translation_payload(model, sys_prompt, batch)
+    active_glossary = (
+        extract_active_glossary(batch, series_glossary) if series_glossary else None
+    )
+    data = _build_translation_payload(
+        model,
+        sys_prompt,
+        batch,
+        anime_title=anime_title,
+        active_glossary=active_glossary,
+    )
 
     for attempt in range(retries):
         # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
@@ -524,6 +638,8 @@ def _translate_single_batch(
                     sys_prompt,
                     timeout=timeout,
                     retries=retries,
+                    anime_title=anime_title,
+                    series_glossary=series_glossary,
                 )
                 if left is None:
                     return batch_idx, None
@@ -535,6 +651,8 @@ def _translate_single_batch(
                     sys_prompt,
                     timeout=timeout,
                     retries=retries,
+                    anime_title=anime_title,
+                    series_glossary=series_glossary,
                 )
                 if right is None:
                     return batch_idx, None
@@ -577,6 +695,7 @@ def translate_cues_llm(
     model: str | None = None,
     batch_size: int = 50,
     max_workers: int = 5,
+    anime_title: str | None = None,
 ) -> list[VTTCue] | None:
     """
     Translate cues via local LiteLLM proxy concurrently across worker threads with tiered failover.
@@ -611,6 +730,7 @@ def translate_cues_llm(
     else:
         return None
 
+    series_glossary = get_series_glossary(anime_title, target_lang)
     endpoint = f"{api_base.rstrip('/')}/chat/completions"
     batches = [cues[i : i + batch_size] for i in range(0, len(cues), batch_size)]
     candidates = get_candidate_models(model)
@@ -624,7 +744,14 @@ def translate_cues_llm(
         executor = ThreadPoolExecutor(max_workers=max_workers)
         futures = [
             executor.submit(
-                _translate_single_batch, idx, b, endpoint, model_name, sys_prompt
+                _translate_single_batch,
+                idx,
+                b,
+                endpoint,
+                model_name,
+                sys_prompt,
+                anime_title=anime_title,
+                series_glossary=series_glossary,
             )
             for idx, b in enumerate(batches)
         ]
@@ -756,7 +883,11 @@ def prepare_subtitles(
 
             if needs_primary_translation:
                 translated_de = translate_cues_llm(
-                    base_cues, target_lang="de", api_base=api_base, model=model
+                    base_cues,
+                    target_lang="de",
+                    api_base=api_base,
+                    model=model,
+                    anime_title=anime_title,
                 )
                 if translated_de:
                     primary_cache_path.write_text(
@@ -770,6 +901,7 @@ def prepare_subtitles(
                     target_lang=secondary_lang,
                     api_base=api_base,
                     model=model,
+                    anime_title=anime_title,
                 )
                 if translated_sec:
                     secondary_cache_path.write_text(

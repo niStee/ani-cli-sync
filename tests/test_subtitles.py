@@ -1112,7 +1112,7 @@ class TestTranslateAbortsWithoutWaitingForStragglers(unittest.TestCase):
         release = threading.Event()
 
         def fake_single_batch(
-            batch_idx, batch, endpoint, model, sys_prompt, timeout=90, retries=2
+            batch_idx, batch, endpoint, model, sys_prompt, *args, **kwargs
         ):
             if batch_idx == 0:
                 started.set()
@@ -1140,7 +1140,7 @@ class TestTranslateAbortsWithoutWaitingForStragglers(unittest.TestCase):
         import ani_cli_sync.subtitles as subtitles_module
 
         def fake_single_batch(
-            batch_idx, batch, endpoint, model, sys_prompt, timeout=90, retries=2
+            batch_idx, batch, endpoint, model, sys_prompt, *args, **kwargs
         ):
             return batch_idx, [c for c in batch]
 
@@ -1566,6 +1566,78 @@ class TestSanitizeVTT(unittest.TestCase):
         self.assertEqual(len(cues), 2)
         self.assertEqual(cues[0].lines, ["Hello & welcome"])
         self.assertEqual(cues[1].lines, ["Year 845"])
+
+
+class TestSeriesContextAndGlossary(unittest.TestCase):
+    def test_get_series_glossary_built_in_aot(self):
+        from ani_cli_sync.subtitles import get_series_glossary
+
+        glossary = get_series_glossary("Attack on Titan Season 1", target_lang="de")
+        self.assertIn("ODM gear", glossary)
+        self.assertEqual(glossary["ODM gear"], "3D-Manöver-Apparat")
+        self.assertIn("Survey Corps", glossary)
+        self.assertEqual(glossary["Survey Corps"], "Aufklärungstrupp")
+        self.assertIn("Colossal Titan", glossary)
+        self.assertEqual(glossary["Colossal Titan"], "Kolossaler Titan")
+
+    def test_extract_active_glossary_filters_present_terms(self):
+        from ani_cli_sync.subtitles import VTTCue, extract_active_glossary
+
+        glossary = {
+            "ODM gear": "3D-Manöver-Apparat",
+            "Survey Corps": "Aufklärungstrupp",
+            "Garrison": "Mauergarnison",
+        }
+        cues = [
+            VTTCue("1", "00:00:01.000 --> 00:00:03.000", ["Equip your odm gear now!"]),
+            VTTCue("2", "00:00:04.000 --> 00:00:06.000", ["Yes, Captain!"]),
+        ]
+        active = extract_active_glossary(cues, glossary)
+        self.assertIn("ODM gear", active)
+        self.assertNotIn("Survey Corps", active)
+        self.assertNotIn("Garrison", active)
+
+    def test_get_series_glossary_user_config_override(self):
+        import tempfile
+
+        from ani_cli_sync.subtitles import get_series_glossary
+
+        with tempfile.TemporaryDirectory() as td:
+            config_dir = Path(td) / "ani-cli"
+            config_dir.mkdir(parents=True)
+            custom_glossary = {
+                "attack on titan": {
+                    "de": {
+                        "Survey Corps": "Erkundungstrupp",
+                        "Scout": "Späher",
+                    }
+                }
+            }
+            (config_dir / "glossary.json").write_text(json.dumps(custom_glossary))
+            with patch.dict(os.environ, {"XDG_CONFIG_HOME": td}):
+                glossary = get_series_glossary("Attack on Titan S2", target_lang="de")
+                self.assertEqual(glossary.get("Survey Corps"), "Erkundungstrupp")
+                self.assertEqual(glossary.get("Scout"), "Späher")
+                # Built-in terms not overridden are preserved
+                self.assertEqual(glossary.get("ODM gear"), "3D-Manöver-Apparat")
+
+    def test_build_translation_payload_includes_show_and_active_glossary(self):
+        from ani_cli_sync.subtitles import VTTCue, _build_translation_payload
+
+        cues = [VTTCue("1", "00:00:01.000 --> 00:00:03.000", ["Equip your ODM gear!"])]
+        active_glossary = {"ODM gear": "3D-Manöver-Apparat"}
+        payload_bytes = _build_translation_payload(
+            "minimax-m3",
+            "Base prompt",
+            cues,
+            anime_title="Attack on Titan",
+            active_glossary=active_glossary,
+        )
+        payload = json.loads(payload_bytes.decode("utf-8"))
+        sys_msg = payload["messages"][0]["content"]
+        self.assertIn('Anime series: "Attack on Titan"', sys_msg)
+        self.assertIn('"ODM gear": "3D-Manöver-Apparat"', sys_msg)
+        self.assertIn("inflect", sys_msg.lower())
 
 
 if __name__ == "__main__":
