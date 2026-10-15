@@ -12,6 +12,7 @@ Features:
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import os
@@ -78,7 +79,30 @@ class SubtitlePlan:
     secondary_sid: int = 2
 
 
-def parse_vtt(vtt_text: str) -> list[VTTCue]:
+_RUBY_RT_RE = re.compile(r"<rt\b[^>]*>.*?</rt>", re.IGNORECASE | re.DOTALL)
+_TAG_RE = re.compile(
+    r"</?(?:[a-zA-Z]+(?:\.[a-zA-Z0-9_-]+)*|[biu]|v(?:\s+[^>]*)?|c(?:\.[a-zA-Z0-9_-]+)*|span|div|p|ruby|rt)(?:\s+[^>]*)?>",
+    re.IGNORECASE,
+)
+_UNICODE_ARTIFACTS_RE = re.compile(r"[\u200B-\u200D\u200E\u200F\uFEFF]")
+
+
+def sanitize_cue_text(text: str) -> str:
+    """Sanitize raw WebVTT cue text by stripping tags, entities, and unicode artifacts."""
+    if not text:
+        return ""
+    # 1. Strip ruby reading annotations (<rt>...</rt>) first before stripping outer tags
+    text = _RUBY_RT_RE.sub("", text)
+    # 2. Strip WebVTT formatting/styling/voice tags
+    text = _TAG_RE.sub("", text)
+    # 3. Decode HTML entities (&amp;, &quot;, &#39;, etc.) and normalize non-breaking spaces
+    text = html.unescape(text).replace("\xa0", " ")
+    # 4. Remove zero-width and directional control characters
+    text = _UNICODE_ARTIFACTS_RE.sub("", text)
+    return text.strip()
+
+
+def parse_vtt(vtt_text: str, sanitize: bool = True) -> list[VTTCue]:
     """Parse WebVTT content into structured VTTCue objects."""
     cues: list[VTTCue] = []
     # Normalize line endings and strip BOM
@@ -101,7 +125,14 @@ def parse_vtt(vtt_text: str) -> list[VTTCue]:
 
         identifier = lines[timing_idx - 1].strip() if timing_idx > 0 else None
         timing = lines[timing_idx].strip()
-        cue_lines = lines[timing_idx + 1 :]
+        raw_lines = lines[timing_idx + 1 :]
+        if sanitize:
+            sanitized_lines = [sanitize_cue_text(line) for line in raw_lines]
+            cue_lines = [line for line in sanitized_lines if line]
+            if not cue_lines:
+                continue
+        else:
+            cue_lines = raw_lines
         cues.append(VTTCue(identifier=identifier, timing=timing, lines=cue_lines))
 
     return cues
