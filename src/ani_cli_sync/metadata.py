@@ -179,8 +179,8 @@ def _execute_graphql(
         },
         method="POST",
     )
-    # nosec B310 - standard library safe URL endpoint
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosemgrep
+    # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 # nosemgrep
         return json.loads(resp.read().decode("utf-8"))
 
 
