@@ -17,6 +17,7 @@ import logging
 import os
 import re
 import subprocess  # nosec B404
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -31,7 +32,27 @@ logger = logging.getLogger(__name__)
 
 FORCED_CUE_THRESHOLD = 50
 DEFAULT_API_BASE = os.environ.get("LITELLM_API_BASE", "http://localhost:4000/v1")
-DEFAULT_MODEL = os.environ.get("ANI_CLI_SYNC_LLM_MODEL", "minimax-m3")
+DEFAULT_FALLBACK_MODELS: tuple[str, ...] = (
+    "minimax-m3",
+    "gemini-2.5-flash",
+    "llm-tower",
+)
+DEFAULT_MODEL = os.environ.get("ANI_CLI_SYNC_LLM_MODEL", DEFAULT_FALLBACK_MODELS[0])
+
+
+def get_candidate_models(model: str | None = None) -> list[str]:
+    """Resolve candidate LLM translation models in priority order."""
+    if model:
+        return [model]
+    env_models = os.environ.get("ANI_CLI_SYNC_LLM_MODELS")
+    if env_models:
+        models = [m.strip() for m in env_models.split(",") if m.strip()]
+        if models:
+            return models
+    env_model = os.environ.get("ANI_CLI_SYNC_LLM_MODEL")
+    if env_model:
+        return [env_model.strip()]
+    return list(DEFAULT_FALLBACK_MODELS)
 
 
 @dataclass
@@ -101,7 +122,12 @@ def format_vtt(cues: list[VTTCue]) -> str:
 
 def count_vtt_cues(vtt_text: str) -> int:
     """Count the number of timestamp lines in a VTT string."""
-    return len(re.findall(r"\b\d{2}:\d{2}(?::\d{2})?\.\d{3}\s+-->\s+\d{2}:\d{2}(?::\d{2})?\.\d{3}\b", vtt_text))
+    return len(
+        re.findall(
+            r"\b\d{2}:\d{2}(?::\d{2})?\.\d{3}\s+-->\s+\d{2}:\d{2}(?::\d{2})?\.\d{3}\b",
+            vtt_text,
+        )
+    )
 
 
 def is_forced_track(vtt_content: str, threshold: int = FORCED_CUE_THRESHOLD) -> bool:
@@ -133,7 +159,11 @@ def resolve_stream_info(
 ) -> StreamInfo | None:
     """Extract stream links, referrer, subtitles, and skip times using ani-cli debug mode."""
     if uncensored is None:
-        uncensored = os.environ.get("ANI_CLI_SYNC_UNCENSORED", "1").lower() in ("1", "true", "yes")
+        uncensored = os.environ.get("ANI_CLI_SYNC_UNCENSORED", "1").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
 
     env = prepare_menu_env(target_title=search_arg, uncensored=uncensored)
     env["ANI_CLI_PLAYER"] = "debug"
@@ -204,7 +234,7 @@ def resolve_stream_info(
             intro_skip=intro_skip,
             outro_skip=outro_skip,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - stream resolution must not crash caller
         logger.debug("Failed to resolve stream info: %s", e)
         return None
 
@@ -220,7 +250,9 @@ def fetch_vtt_text(url: str, timeout: int = 30, referrer: str | None = None) -> 
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise ValueError(f"Unsupported or insecure URL: {url}")
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ani-cli-sync/1.0"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ani-cli-sync/1.0"
+    }
     if referrer:
         headers["Referer"] = referrer
     # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
@@ -229,6 +261,7 @@ def fetch_vtt_text(url: str, timeout: int = 30, referrer: str | None = None) -> 
     # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 # nosemgrep
         return resp.read().decode("utf-8", errors="replace")
+
 
 def _build_translation_payload(
     model: str,
@@ -255,8 +288,10 @@ def _build_translation_payload(
 
 
 def _parse_translation_response(content: str) -> list[list[str]] | None:
-    """Parse the model's JSON array response into per-cue text lines.
+    """Parse the model's JSON response into per-cue text lines.
 
+    Accepts either a JSON array of strings or a key-indexed JSON object
+    mapping contiguous string indices ("0", "1", ...) to strings.
     Strips an optional ```json ... ``` code fence. Returns None on any
     structural failure so the caller can decide what to do (retry, bisect,
     fall back to English).
@@ -270,15 +305,102 @@ def _parse_translation_response(content: str) -> list[list[str]] | None:
         data = json.loads(text)
     except json.JSONDecodeError:
         return None
-    if not isinstance(data, list):
+
+    if isinstance(data, dict):
+        try:
+            int_keys = {int(k): k for k in data}
+        except (ValueError, TypeError):
+            return None
+        n = len(data)
+        if set(int_keys) != set(range(n)):
+            return None
+        raw_entries = [data[int_keys[i]] for i in range(n)]
+    elif isinstance(data, list):
+        raw_entries = data
+    else:
         return None
+
     lines_per_cue: list[list[str]] = []
-    for entry in data:
+    for entry in raw_entries:
         if isinstance(entry, str):
-            lines_per_cue.append(entry.split("\n"))
+            cleaned = [re.sub(r"^\d+:\s*", "", line) for line in entry.split("\n")]
+            lines_per_cue.append(cleaned)
         else:
             return None
     return lines_per_cue
+
+
+def _has_hallucinated_duplicates(batch: list[VTTCue], parsed: list[list[str]]) -> bool:
+    """Detect adjacent duplicate translations when original source cues differed.
+
+    When an LLM duplicates a cue and drops another, overall batch length remains equal
+    to the source length, but the duplicate shifts all subsequent cues. If the source cues
+    genuinely repeated identical lines, the duplicate is legitimate and permitted.
+    """
+    if len(batch) != len(parsed):
+        return True
+    for i in range(1, len(batch)):
+        curr_trans = "\n".join(parsed[i]).strip()
+        prev_trans = "\n".join(parsed[i - 1]).strip()
+        curr_orig = "\n".join(batch[i].lines).strip()
+        prev_orig = "\n".join(batch[i - 1].lines).strip()
+        if curr_trans and curr_trans == prev_trans and curr_orig != prev_orig:
+            return True
+    return False
+
+
+def _has_untranslated_echo(
+    batch: list[VTTCue],
+    parsed: list[list[str]],
+    target_lang: str = "de",
+) -> bool:
+    """Detect if any cue was padded with an untranslated multi-word English source line."""
+    if target_lang == "en" or len(batch) != len(parsed):
+        return False
+    for orig, trans in zip(batch, parsed):
+        orig_text = " ".join(orig.lines).strip()
+        trans_text = " ".join(trans).strip()
+        if len(orig_text.split()) >= 3 and orig_text.lower() == trans_text.lower():
+            return True
+    return False
+
+
+def _extract_anchors(lines: list[str]) -> set[str]:
+    """Extract candidate entity anchors (proper nouns / capitalized names) from cue lines."""
+    anchors = set()
+    for line in lines:
+        clean = re.sub(r"<[^>]+>", "", line)
+        words = re.findall(r"\b[A-Z][a-zA-Z]{2,}\b", clean)
+        for w in words:
+            anchors.add(w.lower())
+    return anchors
+
+
+def _has_anchor_phase_shift(batch: list[VTTCue], parsed: list[list[str]]) -> bool:
+    """Detect if a distinctive entity anchor jumped to an adjacent neighbor cue."""
+    if len(batch) != len(parsed):
+        return True
+    n = len(batch)
+    for i in range(n):
+        orig_anchors = _extract_anchors(batch[i].lines)
+        if not orig_anchors:
+            continue
+        trans_anchors = _extract_anchors(parsed[i])
+
+        if i > 0:
+            prev_orig = _extract_anchors(batch[i - 1].lines)
+            prev_trans = _extract_anchors(parsed[i - 1])
+            for a in orig_anchors:
+                if a not in prev_orig and a in prev_trans and a not in trans_anchors:
+                    return True
+
+        if i < n - 1:
+            next_orig = _extract_anchors(batch[i + 1].lines)
+            next_trans = _extract_anchors(parsed[i + 1])
+            for a in orig_anchors:
+                if a not in next_orig and a in next_trans and a not in trans_anchors:
+                    return True
+    return False
 
 
 def _translate_single_batch(
@@ -292,8 +414,8 @@ def _translate_single_batch(
 ) -> tuple[int, list[VTTCue] | None]:
     """Translate an individual batch of cues with retries.
 
-    Text-only payload (no timestamps); the response is a JSON array of strings
-    in input order. Length mismatches trigger a bisect into smaller sub-batches
+    Text-only payload (no timestamps); the response is a JSON array or object
+    in input order. Mismatches trigger a bisect into smaller sub-batches
     until the mismatched cue can be isolated; a single cue that still misaligns
     after the retry budget falls back to its original English lines so timings
     are never shifted.
@@ -302,6 +424,7 @@ def _translate_single_batch(
     if parsed_ep.scheme not in ("http", "https") or not parsed_ep.netloc:
         raise ValueError(f"Unsupported or insecure endpoint: {endpoint}")
 
+    target_lang = "de" if ("German" in sys_prompt or "de" in sys_prompt) else "other"
     data = _build_translation_payload(model, sys_prompt, batch)
 
     for attempt in range(retries):
@@ -309,7 +432,10 @@ def _translate_single_batch(
         req = urllib.request.Request(
             endpoint,
             data=data,
-            headers={"Content-Type": "application/json", "Authorization": "Bearer dummy"},
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer dummy",
+            },
         )
         try:
             # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
@@ -317,7 +443,15 @@ def _translate_single_batch(
                 res_data = json.loads(resp.read().decode("utf-8"))
                 content = res_data["choices"][0]["message"]["content"]
                 parsed = _parse_translation_response(content)
-                if parsed is not None and len(parsed) == len(batch):
+                if (
+                    parsed is not None
+                    and len(parsed) == len(batch)
+                    and not _has_hallucinated_duplicates(batch, parsed)
+                    and not _has_untranslated_echo(
+                        batch, parsed, target_lang=target_lang
+                    )
+                    and not _has_anchor_phase_shift(batch, parsed)
+                ):
                     return batch_idx, [
                         VTTCue(
                             identifier=orig.identifier,
@@ -326,9 +460,10 @@ def _translate_single_batch(
                         )
                         for orig, translated in zip(batch, parsed)
                     ]
-                # Length mismatch (or unparseable): bisect to find the cue(s) the
-                # model dropped/merged. A leaf of size 1-2 that still misaligns
-                # after exhausting the retry budget falls back to original text.
+                # Length mismatch, hallucinated duplicate, or unparseable: bisect to
+                # isolate the cue(s) the model corrupted/dropped. A leaf of size 1-2
+                # that still misaligns after exhausting the retry budget falls back to
+                # original text.
                 if len(batch) <= 2:
                     logger.warning(
                         "Batch %d cue(s) %s..%s mismatched after retry; falling back to original",
@@ -345,23 +480,60 @@ def _translate_single_batch(
                         for orig in batch
                     ]
                 mid = len(batch) // 2
-                logger.debug("Batch %d length mismatch; bisecting at %d", batch_idx, mid)
+                logger.debug(
+                    "Batch %d length mismatch or duplicate; bisecting at %d",
+                    batch_idx,
+                    mid,
+                )
                 _, left = _translate_single_batch(
-                    batch_idx, batch[:mid], endpoint, model, sys_prompt,
-                    timeout=timeout, retries=retries,
+                    batch_idx,
+                    batch[:mid],
+                    endpoint,
+                    model,
+                    sys_prompt,
+                    timeout=timeout,
+                    retries=retries,
                 )
                 if left is None:
                     return batch_idx, None
                 _, right = _translate_single_batch(
-                    batch_idx, batch[mid:], endpoint, model, sys_prompt,
-                    timeout=timeout, retries=retries,
+                    batch_idx,
+                    batch[mid:],
+                    endpoint,
+                    model,
+                    sys_prompt,
+                    timeout=timeout,
+                    retries=retries,
                 )
                 if right is None:
                     return batch_idx, None
                 return batch_idx, left + right
-        except (urllib.error.URLError, json.JSONDecodeError, OSError, KeyError, IndexError) as e:
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                logger.warning(
+                    "Batch %d: Model %s quota exhausted (429). Fast-failing to next candidate...",
+                    batch_idx,
+                    model,
+                )
+                return batch_idx, None
+            logger.warning(
+                "Batch %d attempt %d failed: HTTP %s", batch_idx, attempt + 1, e
+            )
+            if attempt < retries - 1:
+                if e.code in (500, 502, 503, 504):
+                    time.sleep(min(1.0 * (1.5**attempt), 5.0))
+                continue
+            return batch_idx, None
+        except (
+            urllib.error.URLError,
+            json.JSONDecodeError,
+            OSError,
+            KeyError,
+            IndexError,
+        ) as e:
             logger.warning("Batch %d attempt %d failed: %s", batch_idx, attempt + 1, e)
             if attempt < retries - 1:
+                time.sleep(min(1.0 * (1.5**attempt), 5.0))
                 continue
             return batch_idx, None
     return batch_idx, None
@@ -371,12 +543,12 @@ def translate_cues_llm(
     cues: list[VTTCue],
     target_lang: str,
     api_base: str = DEFAULT_API_BASE,
-    model: str = DEFAULT_MODEL,
+    model: str | None = None,
     batch_size: int = 50,
     max_workers: int = 5,
 ) -> list[VTTCue] | None:
     """
-    Translate cues via local LiteLLM proxy concurrently across worker threads.
+    Translate cues via local LiteLLM proxy concurrently across worker threads with tiered failover.
     For 'de': Produces natural German anime dialogue.
     For 'zh-pinyin': Produces 2 lines per cue:
       Line 1: Context-accurate Hanyu Pinyin with tone marks
@@ -390,8 +562,9 @@ def translate_cues_llm(
             "You are an expert anime subtitle translator. Translate the following English anime subtitle "
             "cues into natural, authentic German dialogue (Deutsche Synchron-/Untertitel-Konventionen). "
             "Maintain all HTML tags (such as <b>, <i>). The user message is a numbered list of cues "
-            "in the form 'i: text'. Return ONLY a JSON array of exactly the same number of strings, "
-            "in the same order. Entry i is the German translation of cue i, with no cue numbers and no commentary."
+            "in the form 'i: text'. Return ONLY a JSON object mapping each cue index to its translation "
+            '(e.g. {"0": "...", "1": "..."}). Every requested index must be present, with no '
+            "missing indices, no commentary, and no markdown fences."
         )
     elif target_lang == "zh-pinyin":
         sys_prompt = (
@@ -400,48 +573,63 @@ def translate_cues_llm(
             "Line 1: Accurate Hanyu Pinyin with tone marks (e.g. Wǒ míngbái le, Lìmǔlǔ dàrén.)\n"
             "Line 2: Traditional Chinese characters (繁體中文, e.g. 我明白了，利姆路大人。)\n"
             "Maintain all HTML tags (such as <b>, <i>). The user message is a numbered list of cues "
-            "in the form 'i: text'. Return ONLY a JSON array of exactly the same number of strings, "
-            "in the same order. Entry i is cue i's two-line translation joined with a newline, "
-            "with no cue numbers and no commentary."
+            "in the form 'i: text'. Return ONLY a JSON object mapping each cue index to its two-line translation "
+            'joined with a newline (e.g. {"0": "...", "1": "..."}). Every requested index must be present, '
+            "with no missing indices, no commentary, and no markdown fences."
         )
     else:
         return None
 
     endpoint = f"{api_base.rstrip('/')}/chat/completions"
     batches = [cues[i : i + batch_size] for i in range(0, len(cues), batch_size)]
-    results: list[list[VTTCue] | None] = [None] * len(batches)
+    candidates = get_candidate_models(model)
 
-    # Not a `with` block on purpose: returning from inside one waits for every
-    # in-flight future at __exit__ (shutdown(wait=True)), which is how a known
-    # failure used to cost the full timeout x retries of the slowest sibling.
-    executor = ThreadPoolExecutor(max_workers=max_workers)
-    futures = [
-        executor.submit(_translate_single_batch, idx, b, endpoint, model, sys_prompt)
-        for idx, b in enumerate(batches)
-    ]
-    failed = False
-    try:
-        for future in as_completed(futures):
-            b_idx, b_cues = future.result()
-            if b_cues is None:
-                logger.warning("Translation failed on batch %d", b_idx)
-                failed = True
-                break
-            results[b_idx] = b_cues
-    finally:
-        # On abort: drop queued batches and stop waiting. Siblings already running
-        # finish on their own, bounded by the per-batch timeout.
-        executor.shutdown(wait=not failed, cancel_futures=failed)
-    if failed:
-        return None
+    for model_name in candidates:
+        results: list[list[VTTCue] | None] = [None] * len(batches)
 
-    all_cues: list[VTTCue] = []
-    for r in results:
-        if r is None:
-            return None
-        all_cues.extend(r)
+        # Not a `with` block on purpose: returning from inside one waits for every
+        # in-flight future at __exit__ (shutdown(wait=True)), which is how a known
+        # failure used to cost the full timeout x retries of the slowest sibling.
+        executor = ThreadPoolExecutor(max_workers=max_workers)
+        futures = [
+            executor.submit(
+                _translate_single_batch, idx, b, endpoint, model_name, sys_prompt
+            )
+            for idx, b in enumerate(batches)
+        ]
+        failed = False
+        try:
+            for future in as_completed(futures):
+                b_idx, b_cues = future.result()
+                if b_cues is None:
+                    logger.warning(
+                        "Translation failed on batch %d with model %s",
+                        b_idx,
+                        model_name,
+                    )
+                    failed = True
+                    break
+                results[b_idx] = b_cues
+        finally:
+            # On abort: drop queued batches and stop waiting. Siblings already running
+            # finish on their own, bounded by the per-batch timeout.
+            executor.shutdown(wait=not failed, cancel_futures=failed)
 
-    return all_cues
+        if not failed and all(r is not None for r in results):
+            all_cues: list[VTTCue] = []
+            for r in results:
+                if r is not None:
+                    all_cues.extend(r)
+            return all_cues
+
+        if model_name != candidates[-1]:
+            logger.warning(
+                "Model %s failed or exhausted; advancing to next candidate in cascade...",
+                model_name,
+            )
+
+    logger.warning("All candidate models exhausted (%s)", candidates)
+    return None
 
 
 def prepare_subtitles(
@@ -452,7 +640,7 @@ def prepare_subtitles(
     secondary_lang: str | None = None,
     cache_dir: Path | None = None,
     api_base: str = DEFAULT_API_BASE,
-    model: str = DEFAULT_MODEL,
+    model: str | None = None,
 ) -> SubtitlePlan:
     """
     Prepare and validate subtitle tracks.
@@ -460,7 +648,8 @@ def prepare_subtitles(
     2. Inspects stream tracks: if stream has full primary (cue_count >= 50), uses it.
     3. If primary is missing/forced, translates using base English track.
     4. If secondary_lang is explicitly requested and missing, translates on demand.
-    5. If secondary_lang is None and stream has English, attaches English as secondary (0s delay).
+    5. If secondary_lang is None and stream has English, attaches English as secondary track
+       for on-demand toggle (e.g. mpv Ctrl+j) with secondary_sid=0 (inactive on startup).
     6. Caches all generated files and returns an MPV SubtitlePlan.
     """
     if cache_dir is None:
@@ -468,16 +657,22 @@ def prepare_subtitles(
         cache_dir = cache_base / "ani-cli" / "subtitles"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    primary_cache_path = get_cached_subtitle_path(anime_title, ep_no, primary_lang, base_dir=cache_dir)
+    primary_cache_path = get_cached_subtitle_path(
+        anime_title, ep_no, primary_lang, base_dir=cache_dir
+    )
     secondary_cache_path = (
         get_cached_subtitle_path(anime_title, ep_no, secondary_lang, base_dir=cache_dir)
         if secondary_lang
         else None
     )
 
-    primary_file: str | None = str(primary_cache_path) if primary_cache_path.is_file() else None
+    primary_file: str | None = (
+        str(primary_cache_path) if primary_cache_path.is_file() else None
+    )
     secondary_file: str | None = (
-        str(secondary_cache_path) if (secondary_cache_path and secondary_cache_path.is_file()) else None
+        str(secondary_cache_path)
+        if (secondary_cache_path and secondary_cache_path.is_file())
+        else None
     )
 
     # Identify candidate tracks on the stream.
@@ -529,22 +724,33 @@ def prepare_subtitles(
             base_cues = parse_vtt(base_content)
 
             if needs_primary_translation:
-                translated_de = translate_cues_llm(base_cues, target_lang="de", api_base=api_base, model=model)
+                translated_de = translate_cues_llm(
+                    base_cues, target_lang="de", api_base=api_base, model=model
+                )
                 if translated_de:
-                    primary_cache_path.write_text(format_vtt(translated_de), encoding="utf-8")
+                    primary_cache_path.write_text(
+                        format_vtt(translated_de), encoding="utf-8"
+                    )
                     primary_file = str(primary_cache_path)
 
             if needs_secondary_translation and secondary_cache_path and secondary_lang:
-                translated_sec = translate_cues_llm(base_cues, target_lang=secondary_lang, api_base=api_base, model=model)
+                translated_sec = translate_cues_llm(
+                    base_cues,
+                    target_lang=secondary_lang,
+                    api_base=api_base,
+                    model=model,
+                )
                 if translated_sec:
-                    secondary_cache_path.write_text(format_vtt(translated_sec), encoding="utf-8")
+                    secondary_cache_path.write_text(
+                        format_vtt(translated_sec), encoding="utf-8"
+                    )
                     secondary_file = str(secondary_cache_path)
         except (urllib.error.URLError, OSError) as e:
             logger.debug("Failed to translate fallback subtitles: %s", e)
 
     sub_files: list[str] = []
     sid = 1
-    secondary_sid = 2
+    secondary_sid = 2 if secondary_lang is not None else 0
 
     if primary_file:
         sub_files.append(primary_file)
@@ -571,14 +777,20 @@ def prefetch_next_episode(
     quality: str | None = None,
     dub: bool = False,
     api_base: str = DEFAULT_API_BASE,
-    model: str = DEFAULT_MODEL,
+    model: str | None = None,
     uncensored: bool | None = None,
 ) -> None:
     """Pre-fetch and pre-translate the next episode's subtitles in the background."""
     if uncensored is None:
-        uncensored = os.environ.get("ANI_CLI_SYNC_UNCENSORED", "1").lower() in ("1", "true", "yes")
+        uncensored = os.environ.get("ANI_CLI_SYNC_UNCENSORED", "1").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
     try:
-        next_info = resolve_stream_info(anime_title, ep_no, quality=quality, dub=dub, uncensored=uncensored)
+        next_info = resolve_stream_info(
+            anime_title, ep_no, quality=quality, dub=dub, uncensored=uncensored
+        )
         if next_info:
             prepare_subtitles(
                 next_info,
@@ -590,8 +802,10 @@ def prefetch_next_episode(
                 model=model,
             )
             logger.info("Prefetched subtitles for '%s' Ep %d", anime_title, ep_no)
-    except Exception as e:
-        logger.debug("Prefetch for '%s' Ep %d encountered an issue: %s", anime_title, ep_no, e)
+    except Exception as e:  # noqa: BLE001 - background prefetch must not crash playback
+        logger.debug(
+            "Prefetch for '%s' Ep %d encountered an issue: %s", anime_title, ep_no, e
+        )
 
 
 def build_mpv_command(

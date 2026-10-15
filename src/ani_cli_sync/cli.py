@@ -607,11 +607,32 @@ def resolve_episode_offset(
     return title_search, anilist_ep
 
 
-# A 24-minute episode; used only when the real duration is unknown.
-_FALLBACK_COMPLETE_SECONDS = 1400.0
+# A 24-minute episode with OP/ED skipped; used only when the real duration is unknown.
+_FALLBACK_COMPLETE_SECONDS = 1150.0
+_DEFAULT_WATCHED_RATIO = 0.80
+_SKIP_AWARE_WATCHED_RATIO = 0.85
 
 
-def _should_advance(returncode: int, elapsed: float, duration: float | None) -> tuple[bool, str]:
+def _calculate_skip_seconds(stream_info) -> float:
+    """Calculate total expected seconds skipped via intro and outro markers."""
+    if not stream_info:
+        return 0.0
+    total = 0.0
+    intro = getattr(stream_info, "intro_skip", None)
+    if intro and len(intro) == 2 and intro[1] > intro[0]:
+        total += intro[1] - intro[0]
+    outro = getattr(stream_info, "outro_skip", None)
+    if outro and len(outro) == 2 and outro[1] > outro[0]:
+        total += outro[1] - outro[0]
+    return total
+
+
+def _should_advance(
+    returncode: int,
+    elapsed: float,
+    duration: float | None,
+    skip_seconds: float = 0.0,
+) -> tuple[bool, str]:
     """Decide whether autoplay may continue to the next episode.
 
     Only positive evidence that the episode played through allows advancing. Closing the
@@ -623,15 +644,25 @@ def _should_advance(returncode: int, elapsed: float, duration: float | None) -> 
     - A zero exit at or past 600s counted as "watched", so closing the window 11 minutes
       into a 24-minute episode started the next one.
 
-    ``elapsed`` is wall-clock for the mpv process, so an intro skip leaves it slightly
-    under the true duration; 90% of duration is the floor for "played through". When the
-    duration is unknown the threshold falls back to a full episode's length rather than a
-    flat 600s.
+    ``elapsed`` is wall-clock for the mpv process. When automated intro/outro skips occur
+    (e.g. ani-skip), skipping OP (~90s) and ED (~90s) removes ~12.5%–15% of runtime, so
+    effective duration (duration - skip_seconds) is used with an 85% completion floor.
+    Without skip metadata, an 80% baseline (matching PlexTraktSync/Trakt standards) allows
+    manual skips without false early-stop halts. When duration is unknown, 1150s (~19.2m)
+    serves as the fallback floor.
     """
     if returncode != 0:
         return False, f"player exited with code {returncode}"
 
-    threshold = duration * 0.90 if duration else _FALLBACK_COMPLETE_SECONDS
+    if duration:
+        if skip_seconds > 0:
+            effective_duration = max(0.0, duration - skip_seconds)
+            threshold = effective_duration * _SKIP_AWARE_WATCHED_RATIO
+        else:
+            threshold = duration * _DEFAULT_WATCHED_RATIO
+    else:
+        threshold = max(0.0, _FALLBACK_COMPLETE_SECONDS - skip_seconds)
+
     if elapsed >= threshold:
         return True, f"played {elapsed:.0f}s of {threshold:.0f}s"
 
@@ -985,7 +1016,8 @@ def cmd_watch(
         # A non-zero exit already means "the user closed the player"; the probe only
         # refines the zero-exit case, so don't pay for a playlist fetch we won't use.
         duration = _probe_duration(stream_info) if ret.returncode == 0 else None
-        advance, why = _should_advance(ret.returncode, elapsed, duration)
+        skip_seconds = _calculate_skip_seconds(stream_info) if ret.returncode == 0 else 0.0
+        advance, why = _should_advance(ret.returncode, elapsed, duration, skip_seconds=skip_seconds)
         if not advance:
             mins = int(elapsed // 60)
             secs = int(elapsed % 60)
