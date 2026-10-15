@@ -20,6 +20,7 @@ from ani_cli_sync.subtitles import (
     fetch_vtt_text,
     format_vtt,
     get_cached_subtitle_path,
+    get_candidate_models,
     is_forced_track,
     parse_vtt,
     prepare_subtitles,
@@ -72,7 +73,14 @@ class TestVTTProcessing(unittest.TestCase):
         # Sample forced has 2 cues (< 50)
         self.assertTrue(is_forced_track(SAMPLE_FORCED_VTT))
         # Synthesize a full track of 55 cues
-        cues_55 = [VTTCue(identifier=str(i), timing=f"00:{i:02d}.000 --> 00:{i:02d}.900", lines=[f"Line {i}"]) for i in range(55)]
+        cues_55 = [
+            VTTCue(
+                identifier=str(i),
+                timing=f"00:{i:02d}.000 --> 00:{i:02d}.900",
+                lines=[f"Line {i}"],
+            )
+            for i in range(55)
+        ]
         full_vtt = format_vtt(cues_55)
         self.assertFalse(is_forced_track(full_vtt))
 
@@ -87,7 +95,9 @@ class TestCachePaths(unittest.TestCase):
         )
         self.assertEqual(
             path,
-            Path("/var/cache/test-subtitles/that_time_i_got_reincarnated_as_a_slime_season_4_ep15_de.vtt"),
+            Path(
+                "/var/cache/test-subtitles/that_time_i_got_reincarnated_as_a_slime_season_4_ep15_de.vtt"
+            ),
         )
 
     def test_get_cached_subtitle_path_zh_pinyin(self):
@@ -192,7 +202,11 @@ class TestMPVCommandBuilder(unittest.TestCase):
             outro_skip=(1345.0, 1435.0),
         )
         plan = SubtitlePlan(
-            sub_files=["/cache/de.vtt", "/cache/zh-pinyin.vtt", "https://stream.example/subs/en.vtt"],
+            sub_files=[
+                "/cache/de.vtt",
+                "/cache/zh-pinyin.vtt",
+                "https://stream.example/subs/en.vtt",
+            ],
             sid=1,
             secondary_sid=2,
         )
@@ -227,7 +241,9 @@ class TestMPVCommandBuilder(unittest.TestCase):
             referrer="https://zokoanime.video/",
             subtitles=[],
         )
-        plan = SubtitlePlan(sub_files=["/cache/de.vtt", "/cache/en.vtt"], sid=1, secondary_sid=0)
+        plan = SubtitlePlan(
+            sub_files=["/cache/de.vtt", "/cache/en.vtt"], sid=1, secondary_sid=0
+        )
         cmd = build_mpv_command(info, plan, "AoT", 1)
         self.assertIn("--sub-file=/cache/de.vtt", cmd)
         self.assertIn("--sub-file=/cache/en.vtt", cmd)
@@ -263,7 +279,11 @@ class TestSubtitleTranslationAndPlanning(unittest.TestCase):
         tracks = [
             {"lang": "en", "label": "Arabic", "src": "https://s/arabic.vtt"},
             {"lang": "en", "label": "English", "src": "https://s/english.vtt"},
-            {"lang": "en", "label": "German (- Deutsch)", "src": "https://s/german.vtt"},
+            {
+                "lang": "en",
+                "label": "German (- Deutsch)",
+                "src": "https://s/german.vtt",
+            },
         ]
         info = StreamInfo(
             video_link="https://s/1080/index.m3u8",
@@ -279,12 +299,16 @@ class TestSubtitleTranslationAndPlanning(unittest.TestCase):
                 return arabic_vtt
             if url.endswith("english.vtt"):
                 return english_vtt
-            return SAMPLE_FORCED_VTT  # German is sign-only, so it is not used as primary
+            return (
+                SAMPLE_FORCED_VTT  # German is sign-only, so it is not used as primary
+            )
 
         with (
             tempfile.TemporaryDirectory() as td,
             patch("ani_cli_sync.subtitles.fetch_vtt_text", side_effect=fake_fetch),
-            patch("ani_cli_sync.subtitles.translate_cues_llm", return_value=None) as mock_translate,
+            patch(
+                "ani_cli_sync.subtitles.translate_cues_llm", return_value=None
+            ) as mock_translate,
         ):
             prepare_subtitles(info, "JJK", 1, primary_lang="de", cache_dir=Path(td))
 
@@ -366,7 +390,13 @@ class TestSubtitleTranslationAndPlanning(unittest.TestCase):
             info = StreamInfo(
                 video_link="https://stream.example/1080/index.m3u8",
                 referrer="https://zokoanime.video/",
-                subtitles=[{"lang": "en", "label": "English (CR)", "src": "https://stream.example/en.vtt"}],
+                subtitles=[
+                    {
+                        "lang": "en",
+                        "label": "English (CR)",
+                        "src": "https://stream.example/en.vtt",
+                    }
+                ],
             )
 
             plan = prepare_subtitles(
@@ -395,7 +425,13 @@ class TestSubtitleTranslationAndPlanning(unittest.TestCase):
             info = StreamInfo(
                 video_link="https://stream.example/1080/index.m3u8",
                 referrer="https://zokoanime.video/",
-                subtitles=[{"lang": "en", "label": "English (CR)", "src": "https://stream.example/en.vtt"}],
+                subtitles=[
+                    {
+                        "lang": "en",
+                        "label": "English (CR)",
+                        "src": "https://stream.example/en.vtt",
+                    }
+                ],
             )
 
             plan = prepare_subtitles(
@@ -419,7 +455,9 @@ class TestSubtitleTranslationAndPlanning(unittest.TestCase):
 
     @patch("ani_cli_sync.subtitles.translate_cues_llm")
     @patch("ani_cli_sync.subtitles.fetch_vtt_text")
-    def test_prepare_subtitles_explicit_secondary_activates_secondary_sid(self, mock_fetch, mock_translate):
+    def test_prepare_subtitles_explicit_secondary_activates_secondary_sid(
+        self, mock_fetch, mock_translate
+    ):
         with tempfile.TemporaryDirectory() as td:
             tmp_dir = Path(td)
             mock_fetch.return_value = SAMPLE_VTT
@@ -428,7 +466,13 @@ class TestSubtitleTranslationAndPlanning(unittest.TestCase):
             info = StreamInfo(
                 video_link="https://stream.example/1080/index.m3u8",
                 referrer="https://zokoanime.video/",
-                subtitles=[{"lang": "en", "label": "English (CR)", "src": "https://stream.example/en.vtt"}],
+                subtitles=[
+                    {
+                        "lang": "en",
+                        "label": "English (CR)",
+                        "src": "https://stream.example/en.vtt",
+                    }
+                ],
             )
 
             plan = prepare_subtitles(
@@ -447,20 +491,28 @@ class TestSubtitleTranslationAndPlanning(unittest.TestCase):
     @patch("ani_cli_sync.subtitles.prepare_subtitles")
     @patch("ani_cli_sync.subtitles.resolve_stream_info")
     def test_prefetch_next_episode(self, mock_resolve, mock_prepare):
-        info = StreamInfo(video_link="https://stream.example/video.m3u8", referrer="https://zokoanime.video/", subtitles=[])
+        info = StreamInfo(
+            video_link="https://stream.example/video.m3u8",
+            referrer="https://zokoanime.video/",
+            subtitles=[],
+        )
         mock_resolve.return_value = info
 
         from ani_cli_sync.subtitles import prefetch_next_episode
-        prefetch_next_episode("Show", 2, primary_lang="de", secondary_lang=None, uncensored=True)
 
-        mock_resolve.assert_called_once_with("Show", 2, quality=None, dub=False, uncensored=True)
+        prefetch_next_episode(
+            "Show", 2, primary_lang="de", secondary_lang=None, uncensored=True
+        )
+
+        mock_resolve.assert_called_once_with(
+            "Show", 2, quality=None, dub=False, uncensored=True
+        )
         mock_prepare.assert_called_once()
         self.assertEqual(mock_prepare.call_args[1]["primary_lang"], "de")
         self.assertIsNone(mock_prepare.call_args[1]["secondary_lang"])
 
 
 class TestTranslationReassemblyAfterModelDrift(unittest.TestCase):
-
     """Issue #64: the German model occasionally merges/drops cues in a batch,
     which used to silently shift every subsequent cue by +1 and produce the
     translation of cue N-1 paired with the timing of cue N. The fix moves
@@ -511,7 +563,15 @@ class TestTranslationReassemblyAfterModelDrift(unittest.TestCase):
                 "choices": [
                     {
                         "message": {
-                            "content": json.dumps(["Feuer!", "Angriff!", "Rückzug!", "Halten!", "Bewegen!"]),
+                            "content": json.dumps(
+                                [
+                                    "Feuer!",
+                                    "Angriff!",
+                                    "Rückzug!",
+                                    "Halten!",
+                                    "Bewegen!",
+                                ]
+                            ),
                         }
                     }
                 ]
@@ -521,7 +581,9 @@ class TestTranslationReassemblyAfterModelDrift(unittest.TestCase):
             resp.__enter__.return_value = resp
             return resp
 
-        with patch("ani_cli_sync.subtitles.urllib.request.urlopen", side_effect=fake_urlopen):
+        with patch(
+            "ani_cli_sync.subtitles.urllib.request.urlopen", side_effect=fake_urlopen
+        ):
             result = translate_cues_llm(self.INPUT_CUES, target_lang="de")
         self.assertIsNotNone(result)
 
@@ -570,9 +632,7 @@ class TestTranslationReassemblyAfterModelDrift(unittest.TestCase):
                 "choices": [
                     {
                         "message": {
-                            "content": json.dumps(
-                                ["Rückzug!", "Halten!", "Bewegen!"]
-                            ),
+                            "content": json.dumps(["Rückzug!", "Halten!", "Bewegen!"]),
                         }
                     }
                 ]
@@ -600,6 +660,7 @@ class TestTranslationReassemblyAfterModelDrift(unittest.TestCase):
         self.assertEqual(result[2].lines, ["Rückzug!"])
         self.assertEqual(result[3].lines, ["Halten!"])
         self.assertEqual(result[4].lines, ["Bewegen!"])
+
     def test_leaf_persistent_mismatch_falls_back_to_original_english(self):
         """After bisect down to a single cue that still misaligns after the
         retry budget, that cue falls back to its original English lines at
@@ -736,7 +797,13 @@ class TestTranslationReassemblyAfterModelDrift(unittest.TestCase):
                     {
                         "message": {
                             "content": json.dumps(
-                                ["Feuer!", "Angriff!", "Angriff!", "Rückzug!", "Halten!"]
+                                [
+                                    "Feuer!",
+                                    "Angriff!",
+                                    "Angriff!",
+                                    "Rückzug!",
+                                    "Halten!",
+                                ]
                             ),
                         }
                     }
@@ -757,9 +824,7 @@ class TestTranslationReassemblyAfterModelDrift(unittest.TestCase):
                 "choices": [
                     {
                         "message": {
-                            "content": json.dumps(
-                                ["Rückzug!", "Halten!", "Bewegen!"]
-                            ),
+                            "content": json.dumps(["Rückzug!", "Halten!", "Bewegen!"]),
                         }
                     }
                 ]
@@ -812,30 +877,54 @@ class TestTranslationReassemblyAfterModelDrift(unittest.TestCase):
         self.assertEqual(result[1].lines, ["Warte!"])
         self.assertEqual(result[2].lines, ["Schau!"])
 
-    def test_bisect_recovers_correct_alignment_when_model_echoes_untranslated_source_at_end(self):
+    def test_bisect_recovers_correct_alignment_when_model_echoes_untranslated_source_at_end(
+        self,
+    ):
         """AoT S1 ep17 symptom: the model dropped cue 0, shifted cues 1..4 into slots 0..3,
         and padded slot 4 with the original English source text of cue 4 to make len == 5.
         Untranslated echo detection must reject the batch and bisect.
         """
         cues = [
-            VTTCue(identifier="1", timing="00:00.000 --> 00:01.000", lines=["What are you suggesting?"]),
-            VTTCue(identifier="2", timing="00:01.000 --> 00:02.000", lines=["We can distract her."]),
-            VTTCue(identifier="3", timing="00:02.000 --> 00:03.000", lines=["Buy some time."]),
-            VTTCue(identifier="4", timing="00:03.000 --> 00:04.000", lines=["She is smart."]),
-            VTTCue(identifier="5", timing="00:04.000 --> 00:05.000", lines=["There is no escape now!"]),
+            VTTCue(
+                identifier="1",
+                timing="00:00.000 --> 00:01.000",
+                lines=["What are you suggesting?"],
+            ),
+            VTTCue(
+                identifier="2",
+                timing="00:01.000 --> 00:02.000",
+                lines=["We can distract her."],
+            ),
+            VTTCue(
+                identifier="3",
+                timing="00:02.000 --> 00:03.000",
+                lines=["Buy some time."],
+            ),
+            VTTCue(
+                identifier="4",
+                timing="00:03.000 --> 00:04.000",
+                lines=["She is smart."],
+            ),
+            VTTCue(
+                identifier="5",
+                timing="00:04.000 --> 00:05.000",
+                lines=["There is no escape now!"],
+            ),
         ]
         responses = {
             5: {
                 "choices": [
                     {
                         "message": {
-                            "content": json.dumps([
-                                "Wir können sie ablenken.",
-                                "Zeit gewinnen.",
-                                "Sie ist klug.",
-                                "Jetzt gibt es kein Entkommen!",
-                                "There is no escape now!",
-                            ]),
+                            "content": json.dumps(
+                                [
+                                    "Wir können sie ablenken.",
+                                    "Zeit gewinnen.",
+                                    "Sie ist klug.",
+                                    "Jetzt gibt es kein Entkommen!",
+                                    "There is no escape now!",
+                                ]
+                            ),
                         }
                     }
                 ]
@@ -844,10 +933,12 @@ class TestTranslationReassemblyAfterModelDrift(unittest.TestCase):
                 "choices": [
                     {
                         "message": {
-                            "content": json.dumps([
-                                "Was schlägst du vor?",
-                                "Wir können sie ablenken.",
-                            ]),
+                            "content": json.dumps(
+                                [
+                                    "Was schlägst du vor?",
+                                    "Wir können sie ablenken.",
+                                ]
+                            ),
                         }
                     }
                 ]
@@ -856,11 +947,13 @@ class TestTranslationReassemblyAfterModelDrift(unittest.TestCase):
                 "choices": [
                     {
                         "message": {
-                            "content": json.dumps([
-                                "Zeit gewinnen.",
-                                "Sie ist klug.",
-                                "Jetzt gibt es kein Entkommen!",
-                            ]),
+                            "content": json.dumps(
+                                [
+                                    "Zeit gewinnen.",
+                                    "Sie ist klug.",
+                                    "Jetzt gibt es kein Entkommen!",
+                                ]
+                            ),
                         }
                     }
                 ]
@@ -879,16 +972,32 @@ class TestTranslationReassemblyAfterModelDrift(unittest.TestCase):
         self.assertEqual(result[3].lines, ["Sie ist klug."])
         self.assertEqual(result[4].lines, ["Jetzt gibt es kein Entkommen!"])
 
-    def test_bisect_recovers_correct_alignment_when_named_entity_anchor_shifts_to_neighbor(self):
+    def test_bisect_recovers_correct_alignment_when_named_entity_anchor_shifts_to_neighbor(
+        self,
+    ):
         """AoT S1 ep17 symptom: 'Armin' in cue 2 shifted to cue 1 because cue 0 was dropped.
         When a capitalized named entity anchor appears in an adjacent cue rather than its
         matching cue, anchor shift detection must reject the batch and bisect.
         """
         cues = [
-            VTTCue(identifier="1", timing="00:00.000 --> 00:01.000", lines=["What did you say?"]),
-            VTTCue(identifier="2", timing="00:01.000 --> 00:02.000", lines=["Here hoping for luck."]),
-            VTTCue(identifier="3", timing="00:02.000 --> 00:03.000", lines=["Armin..."]),
-            VTTCue(identifier="4", timing="00:03.000 --> 00:04.000", lines=["You always clung to Eren."]),
+            VTTCue(
+                identifier="1",
+                timing="00:00.000 --> 00:01.000",
+                lines=["What did you say?"],
+            ),
+            VTTCue(
+                identifier="2",
+                timing="00:01.000 --> 00:02.000",
+                lines=["Here hoping for luck."],
+            ),
+            VTTCue(
+                identifier="3", timing="00:02.000 --> 00:03.000", lines=["Armin..."]
+            ),
+            VTTCue(
+                identifier="4",
+                timing="00:03.000 --> 00:04.000",
+                lines=["You always clung to Eren."],
+            ),
         ]
 
         def mock_bisect(req, timeout=None):
@@ -907,11 +1016,15 @@ class TestTranslationReassemblyAfterModelDrift(unittest.TestCase):
             else:
                 content = ["Was hast du gesagt?", "Hoffen wir auf Glück."]
             resp = MagicMock()
-            resp.read.return_value = json.dumps({"choices": [{"message": {"content": json.dumps(content)}}]}).encode("utf-8")
+            resp.read.return_value = json.dumps(
+                {"choices": [{"message": {"content": json.dumps(content)}}]}
+            ).encode("utf-8")
             resp.__enter__.return_value = resp
             return resp
 
-        with patch("ani_cli_sync.subtitles.urllib.request.urlopen", side_effect=mock_bisect):
+        with patch(
+            "ani_cli_sync.subtitles.urllib.request.urlopen", side_effect=mock_bisect
+        ):
             result = translate_cues_llm(cues, target_lang="de")
         self.assertIsNotNone(result)
         self.assertEqual(len(result), 4)
@@ -919,7 +1032,6 @@ class TestTranslationReassemblyAfterModelDrift(unittest.TestCase):
         self.assertEqual(result[1].lines, ["Hoffen wir auf Glück."])
         self.assertEqual(result[2].lines, ["Armin..."])
         self.assertEqual(result[3].lines, ["Du hast dich immer an Eren geklammert."])
-
 
 
 class TestTranslationDefaults(unittest.TestCase):
@@ -987,7 +1099,9 @@ class TestTranslateAbortsWithoutWaitingForStragglers(unittest.TestCase):
         started = threading.Event()
         release = threading.Event()
 
-        def fake_single_batch(batch_idx, batch, endpoint, model, sys_prompt, timeout=90, retries=2):
+        def fake_single_batch(
+            batch_idx, batch, endpoint, model, sys_prompt, timeout=90, retries=2
+        ):
             if batch_idx == 0:
                 started.set()
                 return batch_idx, None  # immediate failure
@@ -996,7 +1110,9 @@ class TestTranslateAbortsWithoutWaitingForStragglers(unittest.TestCase):
             return batch_idx, batch
 
         cues = parse_vtt(SAMPLE_VTT) * 20  # 60 cues -> 2 batches, so a sibling exists
-        with patch.object(subtitles_module, "_translate_single_batch", side_effect=fake_single_batch):
+        with patch.object(
+            subtitles_module, "_translate_single_batch", side_effect=fake_single_batch
+        ):
             t0 = time.time()
             try:
                 result = subtitles_module.translate_cues_llm(cues, "de")
@@ -1004,16 +1120,22 @@ class TestTranslateAbortsWithoutWaitingForStragglers(unittest.TestCase):
                 release.set()  # never leave the sibling thread blocked
         elapsed = time.time() - t0
         self.assertIsNone(result)
-        self.assertLess(elapsed, 10.0, f"abort waited {elapsed:.1f}s for in-flight batches")
+        self.assertLess(
+            elapsed, 10.0, f"abort waited {elapsed:.1f}s for in-flight batches"
+        )
 
     def test_all_batches_ok_still_returns_translations(self):
         import ani_cli_sync.subtitles as subtitles_module
 
-        def fake_single_batch(batch_idx, batch, endpoint, model, sys_prompt, timeout=90, retries=2):
+        def fake_single_batch(
+            batch_idx, batch, endpoint, model, sys_prompt, timeout=90, retries=2
+        ):
             return batch_idx, [c for c in batch]
 
         cues = parse_vtt(SAMPLE_VTT) * 20
-        with patch.object(subtitles_module, "_translate_single_batch", side_effect=fake_single_batch):
+        with patch.object(
+            subtitles_module, "_translate_single_batch", side_effect=fake_single_batch
+        ):
             result = subtitles_module.translate_cues_llm(cues, "de")
         self.assertIsNotNone(result)
         self.assertEqual(len(result), len(cues))
@@ -1079,7 +1201,9 @@ class TestFetchVttHeaders(unittest.TestCase):
             tempfile.TemporaryDirectory() as td,
             patch("ani_cli_sync.subtitles.translate_cues_llm", return_value=None),
         ):
-            plan = prepare_subtitles(info, "aot", 6, primary_lang="de", cache_dir=Path(td))
+            plan = prepare_subtitles(
+                info, "aot", 6, primary_lang="de", cache_dir=Path(td)
+            )
         self.assertEqual(captured["headers"].get("referer"), self.REFERRER)
         # German track absent -> base English fetched (and translation stubbed out below is
         # not needed: without a translator the plan falls back to the English URL).
@@ -1095,6 +1219,7 @@ class TestFetchVttSecurity(unittest.TestCase):
         with self.assertRaises(ValueError):
             fetch_vtt_text("ftp://example.com/subs.vtt")
 
+
 class TestParseTranslationResponse(unittest.TestCase):
     def test_parses_clean_cues(self):
         content = json.dumps(["Hallo Welt", "Zweite Zeile\nund dritte"])
@@ -1102,11 +1227,19 @@ class TestParseTranslationResponse(unittest.TestCase):
         self.assertEqual(result, [["Hallo Welt"], ["Zweite Zeile", "und dritte"]])
 
     def test_strips_leading_index_prefixes(self):
-        content = json.dumps(["0: Aber bin ich so furchterregend?", "1: Ich kann es nicht verübeln.\n2: Mehr Text"])
+        content = json.dumps(
+            [
+                "0: Aber bin ich so furchterregend?",
+                "1: Ich kann es nicht verübeln.\n2: Mehr Text",
+            ]
+        )
         result = _parse_translation_response(content)
         self.assertEqual(
             result,
-            [["Aber bin ich so furchterregend?"], ["Ich kann es nicht verübeln.", "Mehr Text"]],
+            [
+                ["Aber bin ich so furchterregend?"],
+                ["Ich kann es nicht verübeln.", "Mehr Text"],
+            ],
         )
 
     def test_preserves_legitimate_leading_digits(self):
@@ -1115,26 +1248,248 @@ class TestParseTranslationResponse(unittest.TestCase):
         self.assertEqual(result, [["60% in vier Jahren."], ["14 Meter hoch zu sein."]])
 
     def test_parses_key_indexed_dict(self):
-        content = json.dumps({
-            "0": "Hallo Welt",
-            "1": "Zweite Zeile\nund dritte",
-        })
+        content = json.dumps(
+            {
+                "0": "Hallo Welt",
+                "1": "Zweite Zeile\nund dritte",
+            }
+        )
         result = _parse_translation_response(content)
         self.assertEqual(result, [["Hallo Welt"], ["Zweite Zeile", "und dritte"]])
 
     def test_rejects_key_indexed_dict_with_missing_key(self):
-        content = json.dumps({
-            "0": "Hallo Welt",
-            "2": "Dritte Zeile",
-        })
+        content = json.dumps(
+            {
+                "0": "Hallo Welt",
+                "2": "Dritte Zeile",
+            }
+        )
         self.assertIsNone(_parse_translation_response(content))
 
     def test_rejects_key_indexed_dict_with_non_integer_keys(self):
-        content = json.dumps({
-            "first": "Hallo Welt",
-            "second": "Zweite Zeile",
-        })
+        content = json.dumps(
+            {
+                "first": "Hallo Welt",
+                "second": "Zweite Zeile",
+            }
+        )
         self.assertIsNone(_parse_translation_response(content))
+
+
+class TestTieredTranslationFailover(unittest.TestCase):
+    def test_get_candidate_models_default(self):
+        with patch.dict(os.environ, {}, clear=True):
+            models = get_candidate_models()
+            self.assertEqual(models, ["minimax-m3", "gemini-2.5-flash", "llm-tower"])
+
+    def test_get_candidate_models_single_override(self):
+        with patch.dict(
+            os.environ, {"ANI_CLI_SYNC_LLM_MODEL": "custom-model"}, clear=True
+        ):
+            models = get_candidate_models()
+            self.assertEqual(models, ["custom-model"])
+
+    def test_get_candidate_models_comma_separated(self):
+        with patch.dict(
+            os.environ,
+            {"ANI_CLI_SYNC_LLM_MODELS": "model-1, model-2, model-3"},
+            clear=True,
+        ):
+            models = get_candidate_models()
+            self.assertEqual(models, ["model-1", "model-2", "model-3"])
+
+    def test_get_candidate_models_explicit_arg(self):
+        models = get_candidate_models("explicit-model")
+        self.assertEqual(models, ["explicit-model"])
+
+    @patch("ani_cli_sync.subtitles.urllib.request.urlopen")
+    def test_translate_cues_llm_fast_failover_on_429(self, mock_urlopen):
+        import urllib.error
+
+        cues = parse_vtt(SAMPLE_VTT)
+        models_called = []
+
+        def side_effect(req, timeout=45):
+            body = json.loads(req.data.decode("utf-8"))
+            model = body.get("model")
+            models_called.append(model)
+            if model == "minimax-m3":
+                raise urllib.error.HTTPError(
+                    url=req.full_url,
+                    code=429,
+                    msg="Too Many Requests",
+                    hdrs={},
+                    fp=None,
+                )
+            resp_data = {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "0": "VOR 300 JAHREN",
+                                    "1": "Das Einzige woran ich mich erinnere",
+                                    "2": "Ich habe gewütet",
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = json.dumps(resp_data).encode("utf-8")
+            mock_resp.__enter__.return_value = mock_resp
+            return mock_resp
+
+        mock_urlopen.side_effect = side_effect
+
+        with patch.dict(
+            os.environ,
+            {"ANI_CLI_SYNC_LLM_MODELS": "minimax-m3,gemini-2.5-flash"},
+            clear=True,
+        ):
+            translated = translate_cues_llm(cues, target_lang="de")
+
+        self.assertIsNotNone(translated)
+        self.assertEqual(len(translated), 3)
+        self.assertEqual(translated[0].lines, ["VOR 300 JAHREN"])
+        self.assertEqual(models_called.count("minimax-m3"), 1)
+        self.assertIn("gemini-2.5-flash", models_called)
+
+    @patch("ani_cli_sync.subtitles.time.sleep")
+    @patch("ani_cli_sync.subtitles.urllib.request.urlopen")
+    def test_translate_cues_llm_503_retry_and_failover(self, mock_urlopen, mock_sleep):
+        import urllib.error
+
+        cues = parse_vtt(SAMPLE_VTT)
+        models_called = []
+
+        def side_effect(req, timeout=45):
+            body = json.loads(req.data.decode("utf-8"))
+            model = body.get("model")
+            models_called.append(model)
+            if model == "minimax-m3":
+                raise urllib.error.HTTPError(
+                    url=req.full_url,
+                    code=503,
+                    msg="Service Unavailable",
+                    hdrs={},
+                    fp=None,
+                )
+            resp_data = {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "0": "VOR 300 JAHREN",
+                                    "1": "Das Einzige woran ich mich erinnere",
+                                    "2": "Ich habe gewütet",
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = json.dumps(resp_data).encode("utf-8")
+            mock_resp.__enter__.return_value = mock_resp
+            return mock_resp
+
+        mock_urlopen.side_effect = side_effect
+
+        with patch.dict(
+            os.environ,
+            {"ANI_CLI_SYNC_LLM_MODELS": "minimax-m3,gemini-2.5-flash"},
+            clear=True,
+        ):
+            translated = translate_cues_llm(cues, target_lang="de")
+
+        self.assertIsNotNone(translated)
+        self.assertEqual(len(translated), 3)
+        self.assertEqual(models_called.count("minimax-m3"), 1)
+        self.assertIn("gemini-2.5-flash", models_called)
+
+    @patch("ani_cli_sync.subtitles.time.sleep")
+    @patch("ani_cli_sync.subtitles.urllib.request.urlopen")
+    def test_translate_single_batch_503_backoff_retry(self, mock_urlopen, mock_sleep):
+        import urllib.error
+
+        cues = parse_vtt(SAMPLE_VTT)
+        attempts = 0
+
+        def side_effect(req, timeout=45):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise urllib.error.HTTPError(
+                    url=req.full_url,
+                    code=503,
+                    msg="Service Unavailable",
+                    hdrs={},
+                    fp=None,
+                )
+            resp_data = {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "0": "VOR 300 JAHREN",
+                                    "1": "Das Einzige woran ich mich erinnere",
+                                    "2": "Ich habe gewütet",
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = json.dumps(resp_data).encode("utf-8")
+            mock_resp.__enter__.return_value = mock_resp
+            return mock_resp
+
+        mock_urlopen.side_effect = side_effect
+        _idx, result = _translate_single_batch(
+            0,
+            cues,
+            "http://localhost:4000/v1/chat/completions",
+            "minimax-m3",
+            "sys_prompt",
+            retries=2,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(attempts, 2)
+        mock_sleep.assert_called_once()
+
+    @patch("ani_cli_sync.subtitles.time.sleep")
+    @patch("ani_cli_sync.subtitles.urllib.request.urlopen")
+    def test_translate_cues_llm_all_models_exhausted_returns_none(
+        self, mock_urlopen, mock_sleep
+    ):
+        import urllib.error
+
+        cues = parse_vtt(SAMPLE_VTT)
+
+        def side_effect(req, timeout=45):
+            raise urllib.error.HTTPError(
+                url=req.full_url,
+                code=429,
+                msg="Too Many Requests",
+                hdrs={},
+                fp=None,
+            )
+
+        mock_urlopen.side_effect = side_effect
+
+        with patch.dict(
+            os.environ,
+            {"ANI_CLI_SYNC_LLM_MODELS": "model-a,model-b"},
+            clear=True,
+        ):
+            translated = translate_cues_llm(cues, target_lang="de")
+
+        self.assertIsNone(translated)
 
 
 if __name__ == "__main__":
