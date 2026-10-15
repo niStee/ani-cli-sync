@@ -1609,9 +1609,9 @@ class TestSeriesContextAndGlossary(unittest.TestCase):
         self.assertIn("ODM gear", glossary)
         self.assertEqual(glossary["ODM gear"], "3D-Manöver-Apparat")
         self.assertIn("Survey Corps", glossary)
-        self.assertEqual(glossary["Survey Corps"], "Aufklärungstrupp")
+        self.assertEqual(glossary["Survey Corps"], "der Aufklärungstrupp")
         self.assertIn("Colossal Titan", glossary)
-        self.assertEqual(glossary["Colossal Titan"], "Kolossaler Titan")
+        self.assertEqual(glossary["Colossal Titan"], "der Kolossale Titan")
 
     def test_extract_active_glossary_filters_present_terms(self):
         from ani_cli_sync.subtitles import VTTCue, extract_active_glossary
@@ -1703,7 +1703,7 @@ class TestSeriesContextAndGlossary(unittest.TestCase):
         self.assertIn("ODM gear", glossary)
         self.assertEqual(glossary["ODM gear"], "3D-Manöver-Apparat")
         self.assertIn("Survey Corps", glossary)
-        self.assertEqual(glossary["Survey Corps"], "Aufklärungstrupp")
+        self.assertEqual(glossary["Survey Corps"], "der Aufklärungstrupp")
 
     def test_build_translation_payload_includes_character_profiles(self):
         from ani_cli_sync.metadata import CharacterProfile
@@ -1727,7 +1727,9 @@ class TestSeriesContextAndGlossary(unittest.TestCase):
         self.assertIn("Armin Arlert (male)", sys_msg)
         self.assertIn("Eren Yeager (male)", sys_msg)
 
-    def test_german_translation_prompt_contains_cleft_avoidance(self):
+    def test_german_translation_prompt_contains_cleft_avoidance_and_generic_masculine(
+        self,
+    ):
         from ani_cli_sync.subtitles import VTTCue, translate_cues_llm
 
         cues = [
@@ -1744,6 +1746,11 @@ class TestSeriesContextAndGlossary(unittest.TestCase):
             sys_prompt_arg = mock_batch.call_args[0][4]
             self.assertIn("cleft", sys_prompt_arg.lower())
             self.assertIn("derjenige", sys_prompt_arg.lower())
+            self.assertIn("generic masculine", sys_prompt_arg.lower())
+            self.assertIn("civilian", sys_prompt_arg.lower())
+            self.assertIn("zivilisten", sys_prompt_arg.lower())
+            self.assertIn("compound noun", sys_prompt_arg.lower())
+            self.assertIn("aufklärungstrupp", sys_prompt_arg.lower())
 
 
 if __name__ == "__main__":
