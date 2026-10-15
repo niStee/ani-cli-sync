@@ -52,18 +52,30 @@ SAMPLE_FORCED_VTT = """WEBVTT
 
 class TestVTTProcessing(unittest.TestCase):
     def test_parse_vtt(self):
+        # Raw parsing preserves HTML formatting tags
+        raw_cues = parse_vtt(SAMPLE_VTT, sanitize=False)
+        self.assertEqual(len(raw_cues), 3)
+        self.assertEqual(raw_cues[0].timing, "00:00.460 --> 00:01.880")
+        self.assertEqual(raw_cues[0].lines, ["<b>— 300 YEARS AGO —</b>"])
+        self.assertEqual(raw_cues[1].lines, ["<b>The only thing I remember is...</b>"])
+
+        # Default parsing sanitizes cue text
         cues = parse_vtt(SAMPLE_VTT)
         self.assertEqual(len(cues), 3)
-        self.assertEqual(cues[0].timing, "00:00.460 --> 00:01.880")
-        self.assertEqual(cues[0].lines, ["<b>— 300 YEARS AGO —</b>"])
-        self.assertEqual(cues[1].lines, ["<b>The only thing I remember is...</b>"])
+        self.assertEqual(cues[0].lines, ["— 300 YEARS AGO —"])
+        self.assertEqual(cues[1].lines, ["The only thing I remember is..."])
 
     def test_format_vtt(self):
-        cues = parse_vtt(SAMPLE_VTT)
+        cues = parse_vtt(SAMPLE_VTT, sanitize=False)
         formatted = format_vtt(cues)
         self.assertTrue(formatted.startswith("WEBVTT\n\n"))
         self.assertIn("00:00.460 --> 00:01.880\n<b>— 300 YEARS AGO —</b>", formatted)
         self.assertIn("00:03.960 --> 00:06.380\n<b>I went on a rampage.</b>", formatted)
+
+        # Formatted sanitized cues render clean dialogue without tags
+        clean_cues = parse_vtt(SAMPLE_VTT, sanitize=True)
+        clean_formatted = format_vtt(clean_cues)
+        self.assertIn("00:00.460 --> 00:01.880\n— 300 YEARS AGO —", clean_formatted)
 
     def test_count_vtt_cues(self):
         self.assertEqual(count_vtt_cues(SAMPLE_VTT), 3)
@@ -1490,6 +1502,70 @@ class TestTieredTranslationFailover(unittest.TestCase):
             translated = translate_cues_llm(cues, target_lang="de")
 
         self.assertIsNone(translated)
+
+
+class TestSanitizeVTT(unittest.TestCase):
+    def test_strips_vtt_formatting_and_classes(self):
+        from ani_cli_sync.subtitles import sanitize_cue_text
+
+        text = (
+            "<c.yellow>Wait for me!</c> <v Eren>Attack!</v> <i>Titan</i> <b>Warning</b>"
+        )
+        cleaned = sanitize_cue_text(text)
+        self.assertEqual(cleaned, "Wait for me! Attack! Titan Warning")
+
+    def test_strips_ruby_annotations(self):
+        from ani_cli_sync.subtitles import sanitize_cue_text
+
+        text = "<ruby>超大型巨人<rt>ちょうおおがたきょじん</rt></ruby>"
+        cleaned = sanitize_cue_text(text)
+        self.assertEqual(cleaned, "超大型巨人")
+
+    def test_unescapes_html_entities(self):
+        from ani_cli_sync.subtitles import sanitize_cue_text
+
+        text = "Attack &amp; Defense &quot;Wall Maria&quot; &lt;Safe&gt; &nbsp;&#39;Run&#39;"
+        cleaned = sanitize_cue_text(text)
+        self.assertEqual(cleaned, "Attack & Defense \"Wall Maria\" <Safe>  'Run'")
+
+    def test_strips_invisible_unicode_characters(self):
+        from ani_cli_sync.subtitles import sanitize_cue_text
+
+        text = "\u200bSecret\u200e \u200fMessage\ufeff"
+        cleaned = sanitize_cue_text(text)
+        self.assertEqual(cleaned, "Secret Message")
+
+    def test_preserves_legitimate_math_and_emoticons(self):
+        from ani_cli_sync.subtitles import sanitize_cue_text
+
+        text = "I love this anime <3 and x < 5"
+        cleaned = sanitize_cue_text(text)
+        self.assertEqual(cleaned, "I love this anime <3 and x < 5")
+
+    def test_parse_vtt_integrates_sanitization_and_drops_empty_cues(self):
+        vtt = """WEBVTT
+
+1
+00:00:01.000 --> 00:00:03.000
+<c.yellow>Hello &amp; welcome</c>
+
+2
+00:00:03.500 --> 00:00:05.000
+<c.invisible></c>
+
+3
+00:00:05.500 --> 00:00:07.000
+\u200b
+\u200e
+
+4
+00:00:08.000 --> 00:00:10.000
+<v Narrator>Year 845</v>
+"""
+        cues = parse_vtt(vtt)
+        self.assertEqual(len(cues), 2)
+        self.assertEqual(cues[0].lines, ["Hello & welcome"])
+        self.assertEqual(cues[1].lines, ["Year 845"])
 
 
 if __name__ == "__main__":
