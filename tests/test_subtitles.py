@@ -1567,6 +1567,39 @@ class TestSanitizeVTT(unittest.TestCase):
         self.assertEqual(cues[0].lines, ["Hello & welcome"])
         self.assertEqual(cues[1].lines, ["Year 845"])
 
+    def test_replaces_br_tags_with_spaces_in_sanitizer(self):
+        from ani_cli_sync.subtitles import sanitize_cue_text
+
+        text = "First line<br>Second line<br />Third line"
+        cleaned = sanitize_cue_text(text)
+        self.assertEqual(cleaned, "First line Second line Third line")
+
+    def test_parse_translation_response_converts_br_to_newlines(self):
+        from ani_cli_sync.subtitles import _parse_translation_response
+
+        content = json.dumps({"0": "Zeile eins<br>Zeile zwei<br />Zeile drei"})
+        parsed = _parse_translation_response(content)
+        self.assertEqual(parsed, [["Zeile eins", "Zeile zwei", "Zeile drei"]])
+
+    def test_format_vtt_splits_stray_br_tags_into_clean_lines(self):
+        from ani_cli_sync.subtitles import VTTCue, format_vtt
+
+        cues = [
+            VTTCue(
+                identifier="1",
+                timing="00:01.000 --> 00:03.000",
+                lines=[
+                    "Trost hätte längst zusammenbrechen müssen,<br>aber es hält sich hartnäckig."
+                ],
+            )
+        ]
+        formatted = format_vtt(cues)
+        self.assertNotIn("<br>", formatted)
+        self.assertIn(
+            "Trost hätte längst zusammenbrechen müssen,\naber es hält sich hartnäckig.",
+            formatted,
+        )
+
 
 class TestSeriesContextAndGlossary(unittest.TestCase):
     def test_get_series_glossary_built_in_aot(self):
