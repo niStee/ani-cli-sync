@@ -314,25 +314,25 @@ BUILTIN_SERIES_GLOSSARIES: dict[str, dict[str, dict[str, str]]] = {
         "de": {
             "ODM gear": "3D-Manöver-Apparat",
             "Omni-Directional Mobility gear": "3D-Manöver-Apparat",
-            "Survey Corps": "Aufklärungstrupp",
-            "Scout Regiment": "Aufklärungstrupp",
-            "Scouts": "Aufklärungstrupp",
-            "Garrison": "Mauergarnison",
-            "Garrison Regiment": "Mauergarnison",
-            "Military Police": "Militärpolizei",
-            "Military Police Brigade": "Militärpolizei",
-            "Colossal Titan": "Kolossaler Titan",
-            "Armored Titan": "Gepanzerter Titan",
-            "Beast Titan": "Tiertitan",
-            "Attack Titan": "Attackierender Titan",
-            "Founding Titan": "Urvater-Titan",
-            "Female Titan": "Weiblicher Titan",
-            "Jaw Titan": "Kiefer-Titan",
-            "Cart Titan": "Karren-Titan",
-            "War Hammer Titan": "Kriegshammer-Titan",
-            "Wall Maria": "Mauer Maria",
-            "Wall Rose": "Mauer Rose",
-            "Wall Sina": "Mauer Sina",
+            "Survey Corps": "der Aufklärungstrupp",
+            "Scout Regiment": "der Aufklärungstrupp",
+            "Scouts": "die Aufklärungstruppen",
+            "Garrison": "die Mauergarnison",
+            "Garrison Regiment": "die Mauergarnison",
+            "Military Police": "die Militärpolizei",
+            "Military Police Brigade": "die Militärpolizei",
+            "Colossal Titan": "der Kolossale Titan",
+            "Armored Titan": "der Gepanzerte Titan",
+            "Beast Titan": "der Tiertitan",
+            "Attack Titan": "der Attackierende Titan",
+            "Founding Titan": "der Urvater-Titan",
+            "Female Titan": "der Weibliche Titan",
+            "Jaw Titan": "der Kiefer-Titan",
+            "Cart Titan": "der Karren-Titan",
+            "War Hammer Titan": "der Kriegshammer-Titan",
+            "Wall Maria": "die Mauer Maria",
+            "Wall Rose": "die Mauer Rose",
+            "Wall Sina": "die Mauer Sina",
             "Eldia": "Eldia",
             "Eldian": "Eldier",
             "Marley": "Marley",
@@ -450,7 +450,7 @@ def _build_translation_payload(
         )
         prompt_parts.append(
             f"Active Terminology Glossary: {{{glossary_items}}}.\n"
-            "Strictly adhere to this glossary, inflecting grammatically as required for natural dialogue (e.g. case declension)."
+            "Strictly adhere to this glossary, inflecting grammatically with correct case, gender, and articles as required for natural dialogue."
         )
     effective_prompt = "\n\n".join(prompt_parts)
 
@@ -770,6 +770,11 @@ def translate_cues_llm(
             "Avoid literal cleft sentences with awkward gender guessing (e.g. translate 'I was the one who was wrong' "
             "naturally as 'Ich lag falsch' or 'Der Fehler lag bei mir', NOT 'Ich war derjenige/diejenige'). "
             "When grammatical gender is unavoidable, strictly adhere to the provided Character Profiles. "
+            "For ungendered English roles, titles, or professions (e.g. 'a civilian', 'a soldier', 'a merchant', 'a doctor') "
+            "without an explicit female referent in the scene context or character roster, use the standard generic masculine "
+            "(e.g. 'einen Zivilisten', 'einen Soldaten', NOT 'eine Zivilistin'). Never use typographic gender markers (no '*', ':', '_') or double naming. "
+            "For German compound nouns, grammatical gender and articles are strictly determined by the final element "
+            "(e.g. 'der Aufklärungstrupp' because 'der Trupp', NOT 'das Aufklärungstrupp'). "
             "Maintain all HTML formatting tags (such as <b>, <i>). The user message is a numbered list of cues "
             "in the form 'i: text'. Return ONLY a JSON object mapping each cue index to its translation "
             '(e.g. {"0": "...", "1": "..."}). Every requested index must be present, with no '
