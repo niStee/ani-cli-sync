@@ -80,6 +80,7 @@ class SubtitlePlan:
 
 
 _RUBY_RT_RE = re.compile(r"<rt\b[^>]*>.*?</rt>", re.IGNORECASE | re.DOTALL)
+_BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
 _TAG_RE = re.compile(
     r"</?(?:[a-zA-Z]+(?:\.[a-zA-Z0-9_-]+)*|[biu]|v(?:\s+[^>]*)?|c(?:\.[a-zA-Z0-9_-]+)*|span|div|p|ruby|rt)(?:\s+[^>]*)?>",
     re.IGNORECASE,
@@ -91,13 +92,15 @@ def sanitize_cue_text(text: str) -> str:
     """Sanitize raw WebVTT cue text by stripping tags, entities, and unicode artifacts."""
     if not text:
         return ""
-    # 1. Strip ruby reading annotations (<rt>...</rt>) first before stripping outer tags
+    # 1. Normalize line break tags to spaces before stripping tags to avoid word concatenation
+    text = _BR_RE.sub(" ", text)
+    # 2. Strip ruby reading annotations (<rt>...</rt>) first before stripping outer tags
     text = _RUBY_RT_RE.sub("", text)
-    # 2. Strip WebVTT formatting/styling/voice tags
+    # 3. Strip WebVTT formatting/styling/voice tags
     text = _TAG_RE.sub("", text)
-    # 3. Decode HTML entities (&amp;, &quot;, &#39;, etc.) and normalize non-breaking spaces
+    # 4. Decode HTML entities (&amp;, &quot;, &#39;, etc.) and normalize non-breaking spaces
     text = html.unescape(text).replace("\xa0", " ")
-    # 4. Remove zero-width and directional control characters
+    # 5. Remove zero-width and directional control characters
     text = _UNICODE_ARTIFACTS_RE.sub("", text)
     return text.strip()
 
@@ -146,7 +149,13 @@ def format_vtt(cues: list[VTTCue]) -> str:
         if cue.identifier:
             block.append(cue.identifier)
         block.append(cue.timing)
-        block.extend(cue.lines)
+        for line in cue.lines:
+            # Ensure stray <br> tags are split into separate lines to prevent libass bold parsing bug
+            sub_lines = _BR_RE.split(line)
+            for sub in sub_lines:
+                cleaned_sub = sub.strip()
+                if cleaned_sub:
+                    block.append(cleaned_sub)
         out.append("\n".join(block))
     return "\n\n".join(out) + "\n"
 
@@ -457,8 +466,10 @@ def _parse_translation_response(content: str) -> list[list[str]] | None:
     lines_per_cue: list[list[str]] = []
     for entry in raw_entries:
         if isinstance(entry, str):
+            # Replace any HTML line-break tags with real newlines so libass does not interpret <br> as an open <b> tag
+            entry = _BR_RE.sub("\n", entry)
             cleaned = [re.sub(r"^\d+:\s*", "", line) for line in entry.split("\n")]
-            lines_per_cue.append(cleaned)
+            lines_per_cue.append([line.strip() for line in cleaned if line.strip()])
         else:
             return None
     return lines_per_cue
@@ -711,7 +722,8 @@ def translate_cues_llm(
         sys_prompt = (
             "You are an expert anime subtitle translator. Translate the following English anime subtitle "
             "cues into natural, authentic German dialogue (Deutsche Synchron-/Untertitel-Konventionen). "
-            "Maintain all HTML tags (such as <b>, <i>). The user message is a numbered list of cues "
+            "Use standard newlines for line breaks (NEVER output <br> tags). "
+            "Maintain all HTML formatting tags (such as <b>, <i>). The user message is a numbered list of cues "
             "in the form 'i: text'. Return ONLY a JSON object mapping each cue index to its translation "
             '(e.g. {"0": "...", "1": "..."}). Every requested index must be present, with no '
             "missing indices, no commentary, and no markdown fences."
