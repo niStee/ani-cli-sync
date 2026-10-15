@@ -72,6 +72,15 @@ Automated subtitle translation and media synchronization pipelines frequently su
   - The deterministic, binding gate is the local & CI Ruff count ratchet (`ruff_count_ratchet.py`) with zero slack.
   - External static analyzers (Codacy) are non-blocking advisory signals. Agent workspaces (`.agents/`, `.claude/`, `openspec/`) and markdown documentation are excluded via `.codacy.yaml` to eliminate prose false-positives.
 
+### 7. Series Context Anchoring & Dynamic Batch Glossary Injection
+
+- **Rule**: Never translate anime dialogue in total isolation from the series identity.
+- **Architecture**:
+  - *Context Anchoring*: The system prompt explicitly identifies the series name (`Show: "<anime_title>"`). This activates pre-trained semantic domain models (e.g. established lore and canonical dubbing conventions for popular franchises).
+  - *Dynamic Glossary Injection*: To avoid token bloat and hallucinated forced terms (anti-patterns of static context stuffing), a series glossary is dynamically filtered per batch. Only terms that literally appear in the current 50-cue batch are injected into the active prompt block (`Active Glossary: {"term": "translation"}`).
+  - *Inflection Guidance*: The prompt explicitly directs the LLM to inflect glossary terms naturally according to German grammatical cases (accusative, dative, genitive) rather than inserting rigid strings verbatim.
+  - *User & Built-in Precedence*: Built-in canonical terms (e.g. Attack on Titan ODM gear, Survey Corps, military branches) can be extended or overridden via `~/.config/ani-cli/glossary.json` without external dependencies.
+
 ## Consequences
 
 - Zero runtime dependencies in core remain inviolate.
