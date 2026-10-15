@@ -1,0 +1,9 @@
+---
+exclude_paths:
+  - 'AGENTS.md'
+  - 'CLAUDE.md'
+  - '.agents/**'
+  - '.claude/**'
+  - '.opencode/**'
+  - 'openspec/**'
+  - 'docs/**'
