@@ -43,18 +43,29 @@ tracks each season starting from episode 1. `resolve_episode_offset()` resolves 
 
 **Static Overrides**: To force a specific search string or override automatic chain resolution, append a tuple to `_EPISODE_OFFSETS` in `cli.py`. Standard multi-season shows are computed automatically.
 
-## Subtitle Translation Model
+## Subtitle Translation & Synchronization Architecture
+
+See [ADR-001: Battletested Architecture for Subtitle Translation, Neural VAD Sync, and Playback Integrity](docs/adr/ADR-001-media-subtitle-translation-and-sync.md) for full architectural decisions and anti-pattern mitigations.
+
+### Translation Model Cascade & Failover
 
 Translation runs through the local LiteLLM proxy in `subtitles.py`, batched
 (`batch_size=50`, 5 workers), with **no `max_tokens` and no reasoning control in the request**.
-That is why the default model must be non-reasoning: a reasoning model spends its budget before
+The default model must be non-reasoning: a reasoning model spends its budget before
 emitting any content, and a 50-cue batch then does not finish inside the socket timeout.
+
+A tiered model failover cascade (`DEFAULT_FALLBACK_MODELS = ("minimax-m3", "gemini-2.5-flash", "llm-tower")`) protects against quota exhaustion:
+- **HTTP 429 Quota Exhaustion**: Fast-fails immediately without retrying the exhausted model, advancing the episode translation to the next candidate model.
+- **HTTP 502/503 Transient Errors**: Bounded retry with exponential backoff before escalating to the next candidate.
+- **Override Precedence**: `ANI_CLI_SYNC_LLM_MODELS` (comma-separated list) > `ANI_CLI_SYNC_LLM_MODEL` (single override) > `DEFAULT_FALLBACK_MODELS`.
 
 Measured 2026-10-05, one real 50-cue AoT S1 ep6 batch through the shipped code path:
 
 | model | wall | note |
 |---|---|---|
-| `minimax-m3` | 17.5s | default; Token Plan |
+| `minimax-m3` | 17.5s | primary default; Token Plan |
+| `gemini-2.5-flash` | 19.2s | secondary fallback |
+| `llm-tower` | 24.1s | tertiary local host fallback |
 | `minimax-m2.7-highspeed` | 29.9s | Token Plan |
 | `minimax-m2.7` | 31.8s | Token Plan |
 | `deepseek-v4-flash` | 139.4s | reasoning model; stalls the episode |
@@ -68,7 +79,8 @@ failure still cost the slowest sibling's full budget -- that was a 180s stall.
 
 The OpenCode Go `backup-minimax-*` deployments are `rpm: 2, max_parallel_requests: 1`, so a
 failover onto them serialises 5 batch workers and is a latency trap for this workload; the
-direct Token Plan deployments are the ones that matter.
+direct Token Plan deployments and `llm-tower` are the ones that matter.
+
 
 ## Commands & Testing
 
