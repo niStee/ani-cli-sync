@@ -334,8 +334,33 @@ BUILTIN_SERIES_GLOSSARIES: dict[str, dict[str, dict[str, str]]] = {
             "Commander": "Kommandant",
             "Captain": "Hauptgefreiter",
         }
-    }
+    },
 }
+BUILTIN_SERIES_ALIASES: dict[str, str] = {
+    "shingeki no kyojin": "attack on titan",
+    "snk": "attack on titan",
+    "aot": "attack on titan",
+    "tensei shitara slime datta ken": "that time i got reincarnated as a slime",
+    "tensura": "that time i got reincarnated as a slime",
+    "frieren": "sousou no frieren",
+    "beyond journey's end": "sousou no frieren",
+    "jjk": "jujutsu kaisen",
+}
+
+BUILTIN_SERIES_CHARACTERS: dict[str, str] = {
+    "attack on titan": "Eren (male), Armin (male), Levi (male), Jean (male), Erwin (male), Kenny (male), Reiner (male), Bertholdt (male), Mikasa (female), Historia (female), Hange (female/they).",
+    "that time i got reincarnated as a slime": "Rimuru (genderless/he/they), Veldora (male), Benimaru (male), Shion (female), Shuna (female), Milim (female), Diablo (male), Guy Crimson (male).",
+    "sousou no frieren": "Frieren (female), Fern (female), Stark (male), Himmel (male), Heiter (male), Eisen (male), Flamme (female), Serie (female).",
+}
+
+
+def resolve_canonical_series_key(anime_title: str) -> str:
+    """Normalize anime title using built-in aliases (e.g. Romaji to English canonical)."""
+    title_lower = anime_title.lower()
+    for alias, canonical in BUILTIN_SERIES_ALIASES.items():
+        if alias in title_lower:
+            return canonical
+    return title_lower
 
 
 def get_series_glossary(anime_title: str | None, target_lang: str) -> dict[str, str]:
@@ -344,11 +369,17 @@ def get_series_glossary(anime_title: str | None, target_lang: str) -> dict[str, 
         return {}
 
     title_lower = anime_title.lower()
+    canonical_key = resolve_canonical_series_key(anime_title)
     resolved: dict[str, str] = {}
 
-    # 1. Match built-in series
+    # 1. Match built-in series (checking both raw title and canonical alias)
     for series_key, lang_map in BUILTIN_SERIES_GLOSSARIES.items():
-        if series_key in title_lower or title_lower in series_key:
+        if (
+            series_key in title_lower
+            or title_lower in series_key
+            or series_key in canonical_key
+            or canonical_key in series_key
+        ):
             resolved.update(lang_map.get(target_lang, {}))
             break
 
@@ -407,6 +438,12 @@ def _build_translation_payload(
     prompt_parts = [sys_prompt]
     if anime_title:
         prompt_parts.append(f'Anime series: "{anime_title}".')
+        canonical_key = resolve_canonical_series_key(anime_title)
+        char_roster = BUILTIN_SERIES_CHARACTERS.get(canonical_key)
+        if char_roster:
+            prompt_parts.append(
+                f"Key Character Profiles (grammatical reference for pronouns/gender): {char_roster}"
+            )
     if active_glossary:
         glossary_items = ", ".join(
             f'"{k}": "{v}"' for k, v in sorted(active_glossary.items())
@@ -723,6 +760,9 @@ def translate_cues_llm(
             "You are an expert anime subtitle translator. Translate the following English anime subtitle "
             "cues into natural, authentic German dialogue (Deutsche Synchron-/Untertitel-Konventionen). "
             "Use standard newlines for line breaks (NEVER output <br> tags). "
+            "Avoid literal cleft sentences with awkward gender guessing (e.g. translate 'I was the one who was wrong' "
+            "naturally as 'Ich lag falsch' or 'Der Fehler lag bei mir', NOT 'Ich war derjenige/diejenige'). "
+            "When grammatical gender is unavoidable, strictly adhere to the provided Character Profiles. "
             "Maintain all HTML formatting tags (such as <b>, <i>). The user message is a numbered list of cues "
             "in the form 'i: text'. Return ONLY a JSON object mapping each cue index to its translation "
             '(e.g. {"0": "...", "1": "..."}). Every requested index must be present, with no '

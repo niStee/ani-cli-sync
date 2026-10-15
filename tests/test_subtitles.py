@@ -1672,6 +1672,73 @@ class TestSeriesContextAndGlossary(unittest.TestCase):
         self.assertIn('"ODM gear": "3D-Manöver-Apparat"', sys_msg)
         self.assertIn("inflect", sys_msg.lower())
 
+    def test_resolve_canonical_series_key(self):
+        from ani_cli_sync.subtitles import resolve_canonical_series_key
+
+        self.assertEqual(
+            resolve_canonical_series_key("shingeki no kyojin season 3"),
+            "attack on titan",
+        )
+        self.assertEqual(
+            resolve_canonical_series_key("SnK S4"),
+            "attack on titan",
+        )
+        self.assertEqual(
+            resolve_canonical_series_key("Tensei Shitara Slime Datta Ken Season 2"),
+            "that time i got reincarnated as a slime",
+        )
+        self.assertEqual(
+            resolve_canonical_series_key("Frieren: Beyond Journey's End"),
+            "sousou no frieren",
+        )
+        self.assertEqual(
+            resolve_canonical_series_key("Death Note"),
+            "death note",
+        )
+
+    def test_get_series_glossary_romaji_resolution(self):
+        from ani_cli_sync.subtitles import get_series_glossary
+
+        glossary = get_series_glossary("shingeki no kyojin season 3", target_lang="de")
+        self.assertIn("ODM gear", glossary)
+        self.assertEqual(glossary["ODM gear"], "3D-Manöver-Apparat")
+        self.assertIn("Survey Corps", glossary)
+        self.assertEqual(glossary["Survey Corps"], "Aufklärungstrupp")
+
+    def test_build_translation_payload_includes_character_profiles(self):
+        from ani_cli_sync.subtitles import VTTCue, _build_translation_payload
+
+        cues = [VTTCue("1", "00:00:01.000 --> 00:00:03.000", ["Armin, watch out!"])]
+        payload_bytes = _build_translation_payload(
+            "minimax-m3",
+            "Base prompt",
+            cues,
+            anime_title="shingeki no kyojin season 3",
+        )
+        payload = json.loads(payload_bytes.decode("utf-8"))
+        sys_msg = payload["messages"][0]["content"]
+        self.assertIn("Key Character Profiles", sys_msg)
+        self.assertIn("Armin (male)", sys_msg)
+        self.assertIn("Eren (male)", sys_msg)
+
+    def test_german_translation_prompt_contains_cleft_avoidance(self):
+        from ani_cli_sync.subtitles import VTTCue, translate_cues_llm
+
+        cues = [
+            VTTCue(
+                "1", "00:00:01.000 --> 00:00:03.000", ["I was the one who was wrong."]
+            )
+        ]
+        with patch("ani_cli_sync.subtitles._translate_single_batch") as mock_batch:
+            mock_batch.return_value = (0, cues)
+            translate_cues_llm(
+                cues, target_lang="de", anime_title="shingeki no kyojin season 3"
+            )
+            self.assertTrue(mock_batch.called)
+            sys_prompt_arg = mock_batch.call_args[0][4]
+            self.assertIn("cleft", sys_prompt_arg.lower())
+            self.assertIn("derjenige", sys_prompt_arg.lower())
+
 
 if __name__ == "__main__":
     unittest.main()
