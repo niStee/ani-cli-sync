@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.9.0](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.8.0...ani-cli-sync-v0.9.0) (2026-10-16)
+
+
+### Features
+
+* **subtitles:** add dynamic character metadata and active entity extraction (RAL) ([#79](https://github.com/niStee/ani-cli-sync/issues/79)) ([40c459f](https://github.com/niStee/ani-cli-sync/commit/40c459fdd54a1d5031a322184aadc36b1cab45f8))
+* **subtitles:** add generic masculine convention and morphological glossary articles ([#80](https://github.com/niStee/ani-cli-sync/issues/80)) ([90f92b7](https://github.com/niStee/ani-cli-sync/commit/90f92b7a52d27d09d40885ec0f446c2ee73f0056))
+* **subtitles:** add Romaji series aliasing, character profiles, and cleft avoidance ([#78](https://github.com/niStee/ani-cli-sync/issues/78)) ([b394189](https://github.com/niStee/ani-cli-sync/commit/b3941891fc87e44163c0b54038cd09997e1a51d8))
+* **subtitles:** add series context anchoring and dynamic batch glossary injection ([#75](https://github.com/niStee/ani-cli-sync/issues/75)) ([38163e3](https://github.com/niStee/ani-cli-sync/commit/38163e3588ec739ae16251e1b504b38b33772577))
+* **subtitles:** add WebVTT cue ingestion sanitizer and tag stripper ([#73](https://github.com/niStee/ani-cli-sync/issues/73)) ([080c716](https://github.com/niStee/ani-cli-sync/commit/080c716de328fffda8af08e04d859a35ebd221b9))
+
+
+### Bug Fixes
+
+* **subtitles:** keep timings client-side, bisect on batch count mismatch ([#65](https://github.com/niStee/ani-cli-sync/issues/65)) ([08df017](https://github.com/niStee/ani-cli-sync/commit/08df0177f40312ace600b3fb69ae3ac026daac5e)), closes [#64](https://github.com/niStee/ani-cli-sync/issues/64)
+* **subtitles:** normalize &lt;br&gt; tags to prevent libass bold rendering bug ([#77](https://github.com/niStee/ani-cli-sync/issues/77)) ([4e772dc](https://github.com/niStee/ani-cli-sync/commit/4e772dc54af4627b7fd5b6bbc35188c9b9a2b8f7))
+* **subtitles:** unblock German translation (non-reasoning model + real abort) ([#61](https://github.com/niStee/ani-cli-sync/issues/61)) ([76690b2](https://github.com/niStee/ani-cli-sync/commit/76690b20a023729b8b9f66a9859ce3c0330bde44))
+
+
+### Documentation
+
+* **openspec:** archive series-context-and-glossary to canonical specs ([#76](https://github.com/niStee/ani-cli-sync/issues/76)) ([39c8876](https://github.com/niStee/ani-cli-sync/commit/39c887656eac11c32d142ba97f75a767070154c8))
+* **subtitles:** record the translation model default and its measurements ([#63](https://github.com/niStee/ani-cli-sync/issues/63)) ([c06bbf7](https://github.com/niStee/ani-cli-sync/commit/c06bbf7042a780e59a4c1ec530f6141f92c413d1))
+
 ## [0.8.0](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.7.0...ani-cli-sync-v0.8.0) (2026-10-05)
 
 
