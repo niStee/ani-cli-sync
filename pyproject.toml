@@ -9,7 +9,7 @@ description = "Automated AniList synchronization wrapper for ani-cli"
 readme = "README.md"
 license = "MIT"
 authors = [
-    { name = "Nils Steenebruegge", email = "52573120+niStee@users.noreply.github.com" }
+    { name = "niStee", email = "52573120+niStee@users.noreply.github.com" }
 ]
 requires-python = ">=3.10"
 dependencies = []
