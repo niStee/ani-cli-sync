@@ -6,7 +6,7 @@
   <a href="https://scorecard.dev/viewer/?uri=github.com/niStee/ani-cli-sync"><img src="https://api.scorecard.dev/projects/github.com/niStee/ani-cli-sync/badge" alt="OpenSSF Scorecard"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white" alt="Python 3.10+"></a>
   <a href="https://img.shields.io/badge/Dependencies-0%20(Standard%20Library)-success"><img src="https://img.shields.io/badge/Dependencies-0%20(Standard%20Library)-success" alt="Zero Dependencies"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat" alt="License: MIT"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-blue.svg?style=flat" alt="License: Apache-2.0"></a>
 </p>
 
 > **Automated AniList synchronization wrapper for [`ani-cli`](https://github.com/pystardust/ani-cli).**
@@ -271,4 +271,4 @@ ani-sync set "Frieren: Beyond Journey's End Season 2" 1
 
 ## 📄 License
 
-Distributed under the [MIT License](LICENSE).
+Distributed under the [Apache-2.0 License](LICENSE).
