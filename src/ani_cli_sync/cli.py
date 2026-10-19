@@ -473,7 +473,10 @@ _EPISODE_OFFSETS: list[tuple[str, str | None, int, int]] = [
     ("Frieren: Beyond Journey's End Season 2", None, 10, 28),
     ("Sousou no Frieren 2nd Season", None, 10, 28),
     # Slime S2 Part 2: AniList 1-12 → hianime 1-12
-    ("Part 2", "That Time I Got Reincarnated as a Slime Season 2 Part 2", 12, 0),
+    ("Slime Season 2 Part 2", "That Time I Got Reincarnated as a Slime Season 2 Part 2", 12, 0),
+    ("Slime 2nd Season Part 2", "That Time I Got Reincarnated as a Slime Season 2 Part 2", 12, 0),
+    ("Slime Datta Ken 2nd Season Part 2", "That Time I Got Reincarnated as a Slime Season 2 Part 2", 12, 0),
+    ("Tensei Shitara Slime Datta Ken 2nd Season Part 2", "That Time I Got Reincarnated as a Slime Season 2 Part 2", 12, 0),
     # Slime S2: AniList 1-12 → hianime 1-12
     ("Slime Season 2", "That Time I Got Reincarnated as a Slime Season 2", 12, 0),
     ("Slime 2nd Season", "That Time I Got Reincarnated as a Slime Season 2", 12, 0),

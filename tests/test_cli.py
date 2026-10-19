@@ -249,6 +249,42 @@ class TestResolveEpisodeOffset(unittest.TestCase):
         self.assertEqual(ep, 1)
         self.assertEqual(search, "Tate no Yuusha no Nariagari Season 3")
 
+    def test_non_slime_part_2_resolves_to_identity(self):
+        """Non-Slime 'Part 2' anime must NOT match Slime S2 Part 2 offsets."""
+        search, ep = resolve_episode_offset(
+            "[00/10] Attack on Titan Season 3 Part 2 | Shingeki no Kyojin Season 3 Part 2",
+            "Shingeki no Kyojin Season 3 Part 2",
+            1,
+        )
+        self.assertEqual(ep, 1)
+        self.assertEqual(search, "Shingeki no Kyojin Season 3 Part 2")
+
+        search_sxf, ep_sxf = resolve_episode_offset(
+            "[00/13] SPY x FAMILY Part 2 | SPY×FAMILY Part 2",
+            "SPY×FAMILY Part 2",
+            1,
+        )
+        self.assertEqual(ep_sxf, 1)
+        self.assertEqual(search_sxf, "SPY×FAMILY Part 2")
+
+    def test_episode_offsets_table_no_bare_structural_tokens(self):
+        """_EPISODE_OFFSETS fragments must be anchored to franchise titles, not bare tokens like 'Part 2'."""
+        import re
+
+        from ani_cli_sync.cli import _EPISODE_OFFSETS
+
+        bare_token_pattern = re.compile(r"^(part|season|cour)\s*\d+$", re.IGNORECASE)
+        for fragment, search_override, _, _ in _EPISODE_OFFSETS:
+            self.assertFalse(
+                bare_token_pattern.match(fragment.strip()),
+                f"_EPISODE_OFFSETS fragment '{fragment}' is a bare structural token without franchise context",
+            )
+            self.assertGreaterEqual(
+                len(fragment.strip()),
+                6,
+                f"_EPISODE_OFFSETS fragment '{fragment}' is suspiciously short",
+            )
+
     def test_no_offset_beyond_max_ep(self):
         """Episode > max_anilist_ep: offset must NOT be applied (avoid double-offset)."""
         _, ep = resolve_episode_offset(
