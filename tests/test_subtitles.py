@@ -1061,7 +1061,7 @@ class TestTranslationDefaults(unittest.TestCase):
     """
 
     def test_default_model_is_a_non_reasoning_model(self):
-        self.assertEqual(DEFAULT_MODEL, "minimax-m3")
+        self.assertEqual(DEFAULT_MODEL, "minimax-m3.1-flash")
 
     def test_default_model_is_overridable_by_env(self):
         import importlib
@@ -1292,7 +1292,9 @@ class TestTieredTranslationFailover(unittest.TestCase):
     def test_get_candidate_models_default(self):
         with patch.dict(os.environ, {}, clear=True):
             models = get_candidate_models()
-            self.assertEqual(models, ["minimax-m3", "gemini-2.5-flash", "llm-tower"])
+            self.assertEqual(
+                models, ["minimax-m3.1-flash", "gemini-3.1-flash-lite"]
+            )
 
     def test_get_candidate_models_single_override(self):
         with patch.dict(

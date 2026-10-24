@@ -22,7 +22,7 @@ Automated AniList synchronization wrapper for [`ani-cli`](https://github.com/pys
    - **Tier 3 (Identity)**: Fallback 1-to-1 numbering.
 3. **Completion, Boundary Enforcement & Sequel Rollover**: Auto-transitions status to `COMPLETED` when `ep >= total`. Queries AniList for released TV/ONA sequels with a clobber guard (resumes at `progress + 1` if already in list, prompts in interactive mode or seamlessly continues in `--autoplay`).
 4. **Zero Third-Party Runtime Dependencies**: Implemented strictly with standard library (`urllib.request`, `json`, `argparse`, `subprocess`, `pathlib`, `concurrent.futures`).
-5. **Automated Subtitle Fallback & Dual-Track Pipeline**: Inspects stream tracks (detecting forced tracks `< 50` cues vs. full dialogue). When target tracks are missing or signs-only, translates the base English track concurrently via local LiteLLM proxy (`minimax-m3`, measured; override with `ANI_CLI_SYNC_LLM_MODEL`), producing synchronized German dialogue (`--sid=1`, bottom) and Traditional Chinese + Hanyu Pinyin (`--secondary-sid=2`, top) with persistent caching in `~/.cache/ani-cli/subtitles/`.
+5. **Automated Subtitle Fallback & Dual-Track Pipeline**: Inspects stream tracks (detecting forced tracks `< 50` cues vs. full dialogue). When target tracks are missing or signs-only, translates the base English track concurrently via local LiteLLM proxy (`minimax-m3.1-flash`, measured; override with `ANI_CLI_SYNC_LLM_MODEL`), producing synchronized German dialogue (`--sid=1`, bottom) and Traditional Chinese + Hanyu Pinyin (`--secondary-sid=2`, top) with persistent caching in `~/.cache/ani-cli/subtitles/`.
 
 ## Episode Offset Resolution & Precedence
 
@@ -54,18 +54,57 @@ Translation runs through the local LiteLLM proxy in `subtitles.py`, batched
 The default model must be non-reasoning: a reasoning model spends its budget before
 emitting any content, and a 50-cue batch then does not finish inside the socket timeout.
 
-A tiered model failover cascade (`DEFAULT_FALLBACK_MODELS = ("minimax-m3", "gemini-2.5-flash", "llm-tower")`) protects against quota exhaustion:
+A tiered model failover cascade (`DEFAULT_FALLBACK_MODELS = ("minimax-m3.1-flash", "gemini-3.1-flash-lite")`) protects against quota exhaustion:
 - **HTTP 429 Quota Exhaustion**: Fast-fails immediately without retrying the exhausted model, advancing the episode translation to the next candidate model.
 - **HTTP 502/503 Transient Errors**: Bounded retry with exponential backoff before escalating to the next candidate.
 - **Override Precedence**: `ANI_CLI_SYNC_LLM_MODELS` (comma-separated list) > `ANI_CLI_SYNC_LLM_MODEL` (single override) > `DEFAULT_FALLBACK_MODELS`.
 
-Measured 2026-10-05, one real 50-cue AoT S1 ep6 batch through the shipped code path:
+### Model Governance Contract (the rule that catches dead handles)
+
+A model handle is only usable if it is **registered in ai-infra's
+`home/dot_config/litellm/model-governance.json`**. The local LiteLLM gateway
+validates every requested handle against that registry and **fails closed**
+on an undeclared model, so an unregistered name never reaches a provider.
+
+Consequences for this repo:
+
+- Every member of `DEFAULT_FALLBACK_MODELS` MUST be registered in
+  `model-governance.json` and reachable at `http://localhost:4000/v1`. A
+  default member that the gateway rejects as unknown is a dead failover: the
+  cascade walks into it only when it matters most (a quota event on the
+  primary), burning a retry per dead entry before it can advance.
+- The registry lives in **ai-infra**, not here. This repo consumes handles;
+  it never edits the gateway config or the registry.
+- **Before adding or changing a cascade member, verify it against the live
+  gateway**, not against memory. Read-only probe, no generation:
+
+  ```bash
+  curl -s http://localhost:4000/v1/models | python3 -c "import json,sys; print([m['id'] for m in json.load(sys.stdin)['data']])"
+  ```
+
+  A handle that is absent from that list answers HTTP 400 and is unusable.
+- The offline source of truth for "is this handle registered" is the vendored
+  list in `src/ani_cli_sync/model_registry.py`, checked by
+  `tests/test_model_registry.py`. The live probe above is the cross-check;
+  the vendored list is what CI can assert without a running proxy.
+
+**Lesson (2026-10-24):** the cascade shipped `gemini-2.5-flash` and
+`llm-tower` after both were removed from the gateway on 2026-07-21 (ai-infra
+commit `1f26d7a`). They answered HTTP 400 for months, unnoticed, because
+the cascade is only exercised on a quota exhaustion. A guard test now pins
+every default member against the vendored registry.
+
+Measured 2026-10-24, one real 50-cue batch per model through the shipped code path
+(against the local proxy):
 
 | model | wall | note |
 |---|---|---|
-| `minimax-m3` | 17.5s | primary default; Token Plan |
-| `gemini-2.5-flash` | 19.2s | secondary fallback |
-| `llm-tower` | 24.1s | tertiary local host fallback |
+| `gemini-3.1-flash-lite` | 2.9s | secondary fallback; fastest; no same-model backup |
+| `minimax-m3.1-flash` | 15.9s | primary default; Token Plan; same-model Go backup |
+| `minimax-m3` | 7.6s | qualified but superseded by the M3.1 generation |
+| `gemini-3.8-flash` | 9.2s | HTTP 429 quota exhausted on this workload |
+| `qwen-3.8-flash` | 39.6s | correct output, too slow to sit in front of playback |
+| `glm-5.3-flash` | 45.0s | exceeds the 45s per-batch socket timeout |
 | `minimax-m2.7-highspeed` | 29.9s | Token Plan |
 | `minimax-m2.7` | 31.8s | Token Plan |
 | `deepseek-v4-flash` | 139.4s | reasoning model; stalls the episode |
@@ -79,7 +118,9 @@ failure still cost the slowest sibling's full budget -- that was a 180s stall.
 
 The OpenCode Go `backup-minimax-*` deployments are `rpm: 2, max_parallel_requests: 1`, so a
 failover onto them serialises 5 batch workers and is a latency trap for this workload; the
-direct Token Plan deployments and `llm-tower` are the ones that matter.
+direct Token Plan deployments are the ones that matter. `llm-tower` is **not** a
+translation endpoint: its inference ports do not answer, and the fleet manifest
+deploys only `actions-runner` to that node, so no fleet health check maintains it.
 
 
 ## Commands & Testing

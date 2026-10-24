@@ -19,6 +19,10 @@ context: |
   AniList safety: never clobber or regress watchlist progress without explicit user
   intent; never advance on aborted or unverified playback.
   Zero external runtime dependencies: keep runtime purely in standard library.
+  Translation model handles are governed by ai-infra's model-governance.json: the
+  local LiteLLM gateway fails closed on an undeclared handle, so a model that is
+  not registered there can never answer. A default cascade member must be
+  registered there and reachable through the gateway.
 
 rules:
   proposal:
@@ -29,6 +33,11 @@ rules:
     - Requirements use SHALL and each has at least one WHEN/THEN scenario
     - Describe observable behavior only; no file names, types or internal APIs
     - Include the failure and refusal scenarios, not just the happy path
+  design:
+    - Diagrams MUST use valid Mermaid matching ai-infra ADR-017
+    - Node labels with special characters must be double-quoted
+    - Raw HTML tags in labels are prohibited
   tasks:
     - The first task writes the failing tests for the scenarios
     - Every task names the test or check that proves it done
+    - "Every task names its tier, as '(tier: frontier|mid|low)' after the checkbox; frontier for specs, architecture and trust-core review, mid for implementing a sharpened spec against frozen tests, low for narrowly bounded mechanical work (ai-infra #1016)"
