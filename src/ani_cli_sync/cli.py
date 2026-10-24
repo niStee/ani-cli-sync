@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 ani-cli-sync: Automated AniList synchronization wrapper for ani-cli.
 
@@ -158,7 +157,7 @@ def get_media_list_entry(token: str, user_id: int, media_id: int) -> dict | None
     try:
         res = gql_query(query, variables={"uid": user_id, "mid": media_id}, token=token)
         return res.get("data", {}).get("MediaList")
-    except Exception:
+    except Exception:  # noqa: BLE001 - a failed progress read must not abort the run
         return None
 
 
@@ -191,7 +190,7 @@ def find_sequel(media_id: int, token: str | None = None) -> tuple[dict | None, s
     """
     try:
         res = gql_query(query, variables={"id": media_id}, token=token)
-    except Exception:
+    except Exception:  # noqa: BLE001 - an absent sequel is a valid outcome, not a failure
         return None, None
 
     media = res.get("data", {}).get("Media") if isinstance(res, dict) else None
@@ -237,7 +236,7 @@ def search_anime(title: str) -> dict | None:
     try:
         res = gql_query(query, variables={"search": title})
         return res.get("data", {}).get("Media")
-    except Exception:
+    except Exception:  # noqa: BLE001 - "not found" and "lookup failed" both mean no match
         return None
 
 
@@ -294,8 +293,8 @@ def cmd_login() -> None:
         print(f"\n▶ Authorize here: {auth_url}")
         try:
             subprocess.run(["xdg-open", auth_url], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - no browser opener is not a failure, the URL is printed above
+            logger.debug("xdg-open could not be launched for the AniList authorize URL: %s", exc)
 
     print("\nAfter clicking 'Authorize', copy the token from the URL fragment (after #access_token=...)")
     token = input("\nEnter AniList Token: ").strip()
@@ -344,8 +343,8 @@ def cmd_set(title: str, episode: int) -> None:
         viewer = get_viewer(token)
         entries = get_watching_list(token, viewer["id"])
         media = find_in_watching_list(entries, title)
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - the watchlist lookup is a shortcut, a failure falls through to global search
+        logger.debug("AniList watchlist lookup failed, falling back to global search: %s", exc)
 
     if not media:
         media = search_anime(title)
@@ -484,6 +483,15 @@ _EPISODE_OFFSETS: list[tuple[str, str | None, int, int]] = [
     # Overlord III & IV: provider uses per-season numbering, offset 0 guards against prequel chain
     ("Overlord III", "Overlord III", 13, 0),
     ("Overlord IV", "Overlord IV", 13, 0),
+    # Attack on Titan: The Final Season Part 2: AniList 1-12 → provider "Attack on Titan: Final Season, Part 2" 1-12.
+    # Part 2 entries MUST precede the Part 1 entries: the Part 1 fragment is a substring of the
+    # Part 2 display title, so a Part 1-first order would swallow every Part 2 episode.
+    ("Attack on Titan Final Season Part 2", "Attack on Titan: Final Season, Part 2", 12, 0),
+    ("Attack on Titan: The Final Season Part 2", "Attack on Titan: Final Season, Part 2", 12, 0),
+    ("Shingeki no Kyojin: The Final Season Part 2", "Attack on Titan: Final Season, Part 2", 12, 0),
+    # Attack on Titan: The Final Season Part 1: AniList 1-16 → provider "Attack on Titan: Final Season, Part 1" 1-16.
+    ("Attack on Titan Final Season", "Attack on Titan: Final Season, Part 1", 16, 0),
+    ("Shingeki no Kyojin: The Final Season", "Attack on Titan: Final Season, Part 1", 16, 0),
 ]
 
 
@@ -531,7 +539,7 @@ def compute_prequel_offset(
     while depth < max_depth:
         try:
             res = gql_fn(query, {"id": current_id})
-        except Exception:
+        except Exception:  # noqa: BLE001 - an unresolvable chain means "no computed offset"
             return None
 
         media = res.get("data", {}).get("Media") if isinstance(res, dict) else None
@@ -784,7 +792,9 @@ def cmd_watch(
             args.append("--dub")
         if quality:
             args.extend(["-q", quality])
-        subprocess.run(args)
+        # check=False: ani-cli's exit code is not the caller's contract here.
+        # The watch loop reconciles progress from AniList, not from the player.
+        subprocess.run(args, check=False)
         return
 
     viewer = get_viewer(token)
@@ -799,7 +809,7 @@ def cmd_watch(
             cmd.append("--dub")
         if quality:
             cmd.extend(["-q", quality])
-        subprocess.run(cmd)
+        subprocess.run(cmd, check=False)
         return
 
     # Build fzf menu options
@@ -970,7 +980,7 @@ def cmd_watch(
                             },
                             daemon=True,
                         ).start()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - subtitle setup must never block playback
                 print(f"⚠️ Subtitle fallback setup encountered an issue ({e}). Falling back to native ani-cli.")
                 stream_info = None
 
