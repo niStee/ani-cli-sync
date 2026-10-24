@@ -129,8 +129,8 @@ deploys only `actions-runner` to that node, so no fleet health check maintains i
 # Run unit test suite
 PYTHONPATH=src python3 -m unittest discover -s tests
 
-# Lint
-ruff check src/ tests/
+# Lint (the baseline is 0: the whole tracked repo must be ruff-clean)
+ruff check .
 
 # Lint debt ratchet (what CI gates on)
 python3 scripts/ruff_count_ratchet.py
@@ -158,7 +158,7 @@ played through**. Closing the player window must always stop the chain, never sk
 | mpv exit | elapsed watch time | outcome |
 |---|---|---|
 | non-zero | any | **stop** - treated as the user closing the player |
-| 0 | `>= 85%` of effective duration (`duration - skip_seconds`) when skips present | advance |
+| 0 | `>= 70%` of effective duration (`duration - skip_seconds`) when skips present | advance |
 | 0 | `>= 80%` of probed duration when skips absent | advance |
 | 0 | otherwise (user closed early) | **stop** |
 | 0 | duration unknown | advance only at `>= 1150s - skip_seconds` |
@@ -168,6 +168,12 @@ skips occur (`ani-skip`), `skip_seconds` is subtracted so an episode with skippe
 and ED (~90s) is not falsely classified as an early quit. Without skip metadata, an 80%
 baseline (matching PlexTraktSync and Trakt standards) allows manual skips without stalling.
 When probing fails or in the `no_sub_fallback` path, the 1150s fallback (~19.2 minutes) applies.
+
+**The two ratios answer different questions.** The 70% skip-aware floor applies when the
+tracker knows non-narrative content was skipped, so the floor is relaxed: affected releases
+carry recaps and credits beyond the marked OP/ED, which the skip metadata does not cover.
+The 80% no-skip floor applies when the user may have skipped manually, so it stays strict.
+Relaxing the wrong one would let a closed player window look like a completed episode.
 
 **Why the previous logic was wrong.** It advanced on any non-zero exit (so closing mpv
 skipped the episode) and treated any zero exit past a flat `600s` threshold as "finished",
@@ -379,15 +385,36 @@ Lower the baseline deliberately as findings are fixed:
 python3 scripts/ruff_count_ratchet.py --update
 ```
 
-### The local pre-commit hook is not this gate
+### The local pre-commit hook is stricter than this gate
 
-The global git hook (ai-infra managed, `core.hooksPath`) runs `ruff check --quiet .`. Two
-differences from the CI ratchet, both of which make it weaker:
+The global git hook (ai-infra managed, `core.hooksPath`) lints the **staged snapshot** of
+each staged Python file, per file:
 
-- It is a **directory walk**, so untracked scratch and nested worktrees inflate it.
-- It is guarded by `command -v ruff`, so with ruff absent it **silently passes**.
+```bash
+git show ":$p" | ruff check --quiet --stdin-filename="$p" -
+```
 
-CI is the only enforced lint signal in this repository.
+There is **no baseline allowance**. A staged file that carries pre-existing findings
+blocks the commit even when the change under review adds none. So the hook is stricter
+than the CI ratchet, which only compares a repo-wide count against the baseline.
+
+Consequences:
+
+- A commit that stages a file with existing findings needs those findings cleared
+  (or the baseline lowered via `--update`) first. Do not reach for `--no-verify`:
+  CI's ratchet is the enforced signal, and bypassing the hook locally hides a real
+  gate instead of resolving it.
+- The hook fails loudly when `ruff` is absent (it requires the staged Python set to be
+  lintable). The CI ratchet, by contrast, exits `3` (external failure) rather than
+  silently passing when ruff cannot run.
+- The pre-push hook's Python block is guarded by
+  `ls pyproject.toml setup.cfg requirements*.txt`, and `ls` exits non-zero when **any**
+  named file is missing. This repository has `pyproject.toml` but neither `setup.cfg` nor
+  `requirements*.txt`, so the whole Python block (ruff + pytest) is skipped at push
+  time. Do not rely on that: it is an accident of the file layout, not a policy.
+
+CI is the only *enforced* lint signal in this repository, but the local hook is a real
+gate in practice. Keep the working tree ruff-clean so both pass.
 
 ### Merge queue
 

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 ani-cli-sync: Automated AniList synchronization wrapper for ani-cli.
 
@@ -158,7 +157,7 @@ def get_media_list_entry(token: str, user_id: int, media_id: int) -> dict | None
     try:
         res = gql_query(query, variables={"uid": user_id, "mid": media_id}, token=token)
         return res.get("data", {}).get("MediaList")
-    except Exception:
+    except Exception:  # noqa: BLE001 - a failed progress read must not abort the run
         return None
 
 
@@ -191,7 +190,7 @@ def find_sequel(media_id: int, token: str | None = None) -> tuple[dict | None, s
     """
     try:
         res = gql_query(query, variables={"id": media_id}, token=token)
-    except Exception:
+    except Exception:  # noqa: BLE001 - an absent sequel is a valid outcome, not a failure
         return None, None
 
     media = res.get("data", {}).get("Media") if isinstance(res, dict) else None
@@ -237,7 +236,7 @@ def search_anime(title: str) -> dict | None:
     try:
         res = gql_query(query, variables={"search": title})
         return res.get("data", {}).get("Media")
-    except Exception:
+    except Exception:  # noqa: BLE001 - "not found" and "lookup failed" both mean no match
         return None
 
 
@@ -294,8 +293,8 @@ def cmd_login() -> None:
         print(f"\n▶ Authorize here: {auth_url}")
         try:
             subprocess.run(["xdg-open", auth_url], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - no browser opener is not a failure, the URL is printed above
+            logger.debug("xdg-open could not be launched for the AniList authorize URL: %s", exc)
 
     print("\nAfter clicking 'Authorize', copy the token from the URL fragment (after #access_token=...)")
     token = input("\nEnter AniList Token: ").strip()
@@ -344,8 +343,8 @@ def cmd_set(title: str, episode: int) -> None:
         viewer = get_viewer(token)
         entries = get_watching_list(token, viewer["id"])
         media = find_in_watching_list(entries, title)
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - the watchlist lookup is a shortcut, a failure falls through to global search
+        logger.debug("AniList watchlist lookup failed, falling back to global search: %s", exc)
 
     if not media:
         media = search_anime(title)
@@ -531,7 +530,7 @@ def compute_prequel_offset(
     while depth < max_depth:
         try:
             res = gql_fn(query, {"id": current_id})
-        except Exception:
+        except Exception:  # noqa: BLE001 - an unresolvable chain means "no computed offset"
             return None
 
         media = res.get("data", {}).get("Media") if isinstance(res, dict) else None
@@ -613,7 +612,7 @@ def resolve_episode_offset(
 # A 24-minute episode with OP/ED skipped; used only when the real duration is unknown.
 _FALLBACK_COMPLETE_SECONDS = 1150.0
 _DEFAULT_WATCHED_RATIO = 0.80
-_SKIP_AWARE_WATCHED_RATIO = 0.85
+_SKIP_AWARE_WATCHED_RATIO = 0.70
 
 
 def _calculate_skip_seconds(stream_info) -> float:
@@ -648,11 +647,14 @@ def _should_advance(
       into a 24-minute episode started the next one.
 
     ``elapsed`` is wall-clock for the mpv process. When automated intro/outro skips occur
-    (e.g. ani-skip), skipping OP (~90s) and ED (~90s) removes ~12.5%–15% of runtime, so
-    effective duration (duration - skip_seconds) is used with an 85% completion floor.
-    Without skip metadata, an 80% baseline (matching PlexTraktSync/Trakt standards) allows
-    manual skips without false early-stop halts. When duration is unknown, 1150s (~19.2m)
-    serves as the fallback floor.
+    (e.g. ani-skip), skipping OP (~90s) and ED (~90s) removes ~12.5%-15% of runtime, so
+    effective duration (duration - skip_seconds) is used with a 70% completion floor. The
+    floor is lower than the no-skip baseline because the tracker knows non-narrative
+    content was skipped; the affected releases carry recaps and credits beyond the
+    marked OP/ED, which the skip metadata does not cover. Without skip metadata, an 80%
+    baseline (matching PlexTraktSync and Trakt standards) allows manual skips without
+    false early-stop halts. When duration is unknown, 1150s (~19.2m) serves as the
+    fallback floor.
     """
     if returncode != 0:
         return False, f"player exited with code {returncode}"
@@ -784,7 +786,9 @@ def cmd_watch(
             args.append("--dub")
         if quality:
             args.extend(["-q", quality])
-        subprocess.run(args)
+        # check=False: ani-cli's exit code is not the caller's contract here.
+        # The watch loop reconciles progress from AniList, not from the player.
+        subprocess.run(args, check=False)
         return
 
     viewer = get_viewer(token)
@@ -799,7 +803,7 @@ def cmd_watch(
             cmd.append("--dub")
         if quality:
             cmd.extend(["-q", quality])
-        subprocess.run(cmd)
+        subprocess.run(cmd, check=False)
         return
 
     # Build fzf menu options
@@ -970,7 +974,7 @@ def cmd_watch(
                             },
                             daemon=True,
                         ).start()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - subtitle setup must never block playback
                 print(f"⚠️ Subtitle fallback setup encountered an issue ({e}). Falling back to native ani-cli.")
                 stream_info = None
 
