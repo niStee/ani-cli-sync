@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.1](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.9.0...ani-cli-sync-v0.9.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* **subtitles:** replace dead model handles in the translation cascade ([#93](https://github.com/niStee/ani-cli-sync/issues/93)) ([d457ed3](https://github.com/niStee/ani-cli-sync/commit/d457ed391ffa2004ae1c41f9ea8006fb11006697))
+* **sync:** anchor Slime Season 2 Part 2 offset table entries to franchise titles ([#83](https://github.com/niStee/ani-cli-sync/issues/83)) ([341461a](https://github.com/niStee/ani-cli-sync/commit/341461a55ad168ab1f54658d3a5f0de7cd426bd7))
+
 ## [0.9.0](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.8.0...ani-cli-sync-v0.9.0) (2026-10-16)
 
 
