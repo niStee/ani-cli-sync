@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import unittest
-import urllib.error
 import unittest.mock
+import urllib.error
+
 from ani_cli_sync.cli import (
     compute_prequel_offset,
     find_in_watching_list,
@@ -112,7 +113,7 @@ class TestResolveEpisodeOffset(unittest.TestCase):
 
     # ── Frieren S2 ────────────────────────────────────────────────────────────
     def test_frieren_s2_ep1_maps_to_29(self):
-        search, ep = resolve_episode_offset(
+        _, ep = resolve_episode_offset(
             "[01/10] Frieren: Beyond Journey's End Season 2 | Sousou no Frieren 2nd Season",
             "Sousou no Frieren 2nd Season",
             1,
@@ -202,7 +203,7 @@ class TestResolveEpisodeOffset(unittest.TestCase):
         self.assertEqual(search, "That Time I Got Reincarnated as a Slime Season 3")
 
     def test_slime_s3_3rd_season_ep_beyond_max_falls_through_to_identity(self):
-        search, ep = resolve_episode_offset(
+        _, ep = resolve_episode_offset(
             "[25/24] Tensei Shitara Slime Datta Ken 3rd Season",
             "Tensei Shitara Slime Datta Ken 3rd Season",
             25,
@@ -317,9 +318,9 @@ class TestCmdSetGuard(unittest.TestCase):
             unittest.mock.patch.object(cli_module, "get_watching_list", return_value=[]),
             unittest.mock.patch.object(cli_module, "search_anime", return_value=media),
             unittest.mock.patch.object(cli_module, "update_progress") as mock_update,
+            self.assertRaises(SystemExit) as ctx,
         ):
-            with self.assertRaises(SystemExit) as ctx:
-                cli_module.cmd_set("Frieren Season 2", 29)
+            cli_module.cmd_set("Frieren Season 2", 29)
 
         self.assertEqual(ctx.exception.code, 1)
         mock_update.assert_not_called()
