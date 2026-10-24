@@ -39,10 +39,15 @@ logger = logging.getLogger(__name__)
 
 FORCED_CUE_THRESHOLD = 50
 DEFAULT_API_BASE = os.environ.get("LITELLM_API_BASE", "http://localhost:4000/v1")
+# Every member must be a handle the local LiteLLM gateway accepts, i.e. one
+# registered in ai-infra's model-governance.json. The gateway fails closed on an
+# undeclared handle, so a dead member here is a failover that walks into HTTP
+# 400 exactly when the cascade is needed. See AGENTS.md, "Model Governance
+# Contract", and the vendored registry in ani_cli_sync.model_registry.
 DEFAULT_FALLBACK_MODELS: tuple[str, ...] = (
     "minimax-m3",
-    "gemini-2.5-flash",
-    "llm-tower",
+    "minimax-m3.1-flash",
+    "gemini-3.1-flash-lite",
 )
 DEFAULT_MODEL = os.environ.get("ANI_CLI_SYNC_LLM_MODEL", DEFAULT_FALLBACK_MODELS[0])
 

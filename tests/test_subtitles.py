@@ -1292,7 +1292,9 @@ class TestTieredTranslationFailover(unittest.TestCase):
     def test_get_candidate_models_default(self):
         with patch.dict(os.environ, {}, clear=True):
             models = get_candidate_models()
-            self.assertEqual(models, ["minimax-m3", "gemini-2.5-flash", "llm-tower"])
+            self.assertEqual(
+                models, ["minimax-m3", "minimax-m3.1-flash", "gemini-3.1-flash-lite"]
+            )
 
     def test_get_candidate_models_single_override(self):
         with patch.dict(
