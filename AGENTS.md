@@ -158,7 +158,7 @@ played through**. Closing the player window must always stop the chain, never sk
 | mpv exit | elapsed watch time | outcome |
 |---|---|---|
 | non-zero | any | **stop** - treated as the user closing the player |
-| 0 | `>= 85%` of effective duration (`duration - skip_seconds`) when skips present | advance |
+| 0 | `>= 70%` of effective duration (`duration - skip_seconds`) when skips present | advance |
 | 0 | `>= 80%` of probed duration when skips absent | advance |
 | 0 | otherwise (user closed early) | **stop** |
 | 0 | duration unknown | advance only at `>= 1150s - skip_seconds` |
@@ -168,6 +168,12 @@ skips occur (`ani-skip`), `skip_seconds` is subtracted so an episode with skippe
 and ED (~90s) is not falsely classified as an early quit. Without skip metadata, an 80%
 baseline (matching PlexTraktSync and Trakt standards) allows manual skips without stalling.
 When probing fails or in the `no_sub_fallback` path, the 1150s fallback (~19.2 minutes) applies.
+
+**The two ratios answer different questions.** The 70% skip-aware floor applies when the
+tracker knows non-narrative content was skipped, so the floor is relaxed: affected releases
+carry recaps and credits beyond the marked OP/ED, which the skip metadata does not cover.
+The 80% no-skip floor applies when the user may have skipped manually, so it stays strict.
+Relaxing the wrong one would let a closed player window look like a completed episode.
 
 **Why the previous logic was wrong.** It advanced on any non-zero exit (so closing mpv
 skipped the episode) and treated any zero exit past a flat `600s` threshold as "finished",

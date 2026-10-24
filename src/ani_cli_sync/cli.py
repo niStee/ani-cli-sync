@@ -612,7 +612,7 @@ def resolve_episode_offset(
 # A 24-minute episode with OP/ED skipped; used only when the real duration is unknown.
 _FALLBACK_COMPLETE_SECONDS = 1150.0
 _DEFAULT_WATCHED_RATIO = 0.80
-_SKIP_AWARE_WATCHED_RATIO = 0.85
+_SKIP_AWARE_WATCHED_RATIO = 0.70
 
 
 def _calculate_skip_seconds(stream_info) -> float:
@@ -647,11 +647,14 @@ def _should_advance(
       into a 24-minute episode started the next one.
 
     ``elapsed`` is wall-clock for the mpv process. When automated intro/outro skips occur
-    (e.g. ani-skip), skipping OP (~90s) and ED (~90s) removes ~12.5%–15% of runtime, so
-    effective duration (duration - skip_seconds) is used with an 85% completion floor.
-    Without skip metadata, an 80% baseline (matching PlexTraktSync/Trakt standards) allows
-    manual skips without false early-stop halts. When duration is unknown, 1150s (~19.2m)
-    serves as the fallback floor.
+    (e.g. ani-skip), skipping OP (~90s) and ED (~90s) removes ~12.5%-15% of runtime, so
+    effective duration (duration - skip_seconds) is used with a 70% completion floor. The
+    floor is lower than the no-skip baseline because the tracker knows non-narrative
+    content was skipped; the affected releases carry recaps and credits beyond the
+    marked OP/ED, which the skip metadata does not cover. Without skip metadata, an 80%
+    baseline (matching PlexTraktSync and Trakt standards) allows manual skips without
+    false early-stop halts. When duration is unknown, 1150s (~19.2m) serves as the
+    fallback floor.
     """
     if returncode != 0:
         return False, f"player exited with code {returncode}"

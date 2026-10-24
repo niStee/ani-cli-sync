@@ -68,6 +68,29 @@ class TestAutoplayStopSemantics(unittest.TestCase):
         advance, reason = _should_advance(0, 1308.0, 1463.5, skip_seconds=176.0)
         self.assertTrue(advance, reason)
 
+    def test_playback_with_skips_and_recap_advances(self):
+        # Attack on Titan Ep 15 case: 1463s duration, 176s skipped (OP+ED), 1028s elapsed.
+        # Effective duration is 1287s; at the skip-aware ratio this is a played-through
+        # episode, so the chain must continue.
+        advance, reason = _should_advance(0, 1028.0, 1463.0, skip_seconds=176.0)
+        self.assertTrue(advance, reason)
+
+    def test_playback_with_skips_stops_when_closed_early(self):
+        # Even with 177s skipped, quitting at 600s into a 1463s episode must not advance.
+        advance, _ = _should_advance(0, 600.0, 1463.0, skip_seconds=177.0)
+        self.assertFalse(advance)
+
+    def test_no_skip_baseline_is_unchanged_below_80_percent(self):
+        # The ratio relaxation must not leak into the no-skip regime: 1008s of 1440s
+        # is 70% of the total duration, which is still below the 80% baseline.
+        advance, _ = _should_advance(0, 1440.0 * 0.70, self.DURATION)
+        self.assertFalse(advance)
+
+    def test_no_skip_baseline_is_unchanged_above_80_percent(self):
+        # The positive half of the pair: 1152s of 1440s is exactly 80% and advances.
+        advance, reason = _should_advance(0, 1440.0 * 0.80, self.DURATION)
+        self.assertTrue(advance, reason)
+
     def test_unknown_duration_falls_back_to_conservative_threshold(self):
         # Duration unavailable: require a full episode minus skipped OP/ED (1150s),
         # rejecting early quit at 10 minutes (660s).
