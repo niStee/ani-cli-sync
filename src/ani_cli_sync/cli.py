@@ -1165,7 +1165,7 @@ def main() -> None:
         p.add_argument(
             "--sub-secondary",
             default=os.environ.get("ANI_CLI_SYNC_SUB_SECONDARY", None),
-            help="Secondary subtitle language on demand (e.g. zh-pinyin; default: stream English or none)",
+            help="Secondary subtitle language on demand (e.g. en, zh-pinyin; default: disabled)",
         )
         p.add_argument(
             "--no-sub-fallback",
