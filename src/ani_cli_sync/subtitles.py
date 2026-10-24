@@ -45,7 +45,6 @@ DEFAULT_API_BASE = os.environ.get("LITELLM_API_BASE", "http://localhost:4000/v1"
 # 400 exactly when the cascade is needed. See AGENTS.md, "Model Governance
 # Contract", and the vendored registry in ani_cli_sync.model_registry.
 DEFAULT_FALLBACK_MODELS: tuple[str, ...] = (
-    "minimax-m3",
     "minimax-m3.1-flash",
     "gemini-3.1-flash-lite",
 )

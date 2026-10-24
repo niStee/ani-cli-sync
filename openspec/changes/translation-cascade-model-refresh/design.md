@@ -24,16 +24,17 @@ Replace the default candidate list with:
 
 | position | model | rationale |
 |---|---|---|
-| 1 | `minimax-m3` | ADR-001's recommended non-reasoning model. Fastest candidate that also has a same-model backup deployment under ADR-006. Measured 7.6s. |
-| 2 | `minimax-m3.1-flash` | Current MiniMax generation, tier T2, same-model OpenCode Go backup. Measured 15.9s. |
-| 3 | `gemini-3.1-flash-lite` | Measured-fastest candidate (2.9s). Covers the case where both MiniMax deployments are exhausted on the shared Token Plan. |
+| 1 | `minimax-m3.1-flash` | Current MiniMax generation, tier T2, same-model OpenCode Go backup under ADR-006. Measured 15.9s, sound German output. |
+| 2 | `gemini-3.1-flash-lite` | Measured-fastest candidate (2.9s). Covers the case where the MiniMax Token Plan deployment is quota-exhausted. |
 
-Position 1 keeps the existing behaviour for the common case, so this is not
-a behavioural swap for a healthy primary. Positions 2 and 3 replace dead
-handles.
+The previous primary `minimax-m3` is retired from the cascade. It measured
+faster (7.6s) and is still registered and reachable, but the M3.1 generation
+supersedes it, and a two-member cascade spends fewer retries per failover
+than a three-member one.
 
 ### Why not the other measured candidates
 
+- `minimax-m3` (7.6s): qualified, but superseded by the M3.1 generation.
 - `gemini-3.8-flash` (9.2s): returned HTTP 429 on the measurement run. It
   stays out of the cascade because a candidate that is quota-exhausted right
   now would consume the fast-fail path on the first quota event.
@@ -55,11 +56,12 @@ omission, not an oversight, and the proposal states it as out of scope.
 All three candidates are already registered in ai-infra's
 `home/dot_config/litellm/model-governance.json`:
 
-- `minimax-m3`: tier T2, `anthropic/MiniMax-M3` primary,
-  `openai/minimax-m3` backup.
 - `minimax-m3.1-flash`: tier T2, `anthropic/MiniMax-M3.1-Flash` primary,
   `openai/minimax-m3.1-flash-free` backup.
 - `gemini-3.1-flash-lite`: tier T2, `gemini/gemini-3.1-flash-lite` primary.
+- `minimax-m3`: tier T2, `anthropic/MiniMax-M3` primary,
+  `openai/minimax-m3` backup. Registered and reachable, retired from the
+  cascade in favour of the M3.1 generation.
 
 ADR-006 prohibits cross-model fallback at the gateway; the cascade here is a
 client-side cross-model failover, which is the layer ADR-006 delegates that
@@ -81,7 +83,7 @@ untouched:
   candidate is abandoned.
 
 The only difference in failure behaviour is that the cascade no longer walks
-into unknown model handles. A 429 on `minimax-m3` now advances to a model
+into unknown model handles. A 429 on the primary now advances to a model
 that answers.
 
 ## Test design

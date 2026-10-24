@@ -22,7 +22,7 @@ Automated AniList synchronization wrapper for [`ani-cli`](https://github.com/pys
    - **Tier 3 (Identity)**: Fallback 1-to-1 numbering.
 3. **Completion, Boundary Enforcement & Sequel Rollover**: Auto-transitions status to `COMPLETED` when `ep >= total`. Queries AniList for released TV/ONA sequels with a clobber guard (resumes at `progress + 1` if already in list, prompts in interactive mode or seamlessly continues in `--autoplay`).
 4. **Zero Third-Party Runtime Dependencies**: Implemented strictly with standard library (`urllib.request`, `json`, `argparse`, `subprocess`, `pathlib`, `concurrent.futures`).
-5. **Automated Subtitle Fallback & Dual-Track Pipeline**: Inspects stream tracks (detecting forced tracks `< 50` cues vs. full dialogue). When target tracks are missing or signs-only, translates the base English track concurrently via local LiteLLM proxy (`minimax-m3`, measured; override with `ANI_CLI_SYNC_LLM_MODEL`), producing synchronized German dialogue (`--sid=1`, bottom) and Traditional Chinese + Hanyu Pinyin (`--secondary-sid=2`, top) with persistent caching in `~/.cache/ani-cli/subtitles/`.
+5. **Automated Subtitle Fallback & Dual-Track Pipeline**: Inspects stream tracks (detecting forced tracks `< 50` cues vs. full dialogue). When target tracks are missing or signs-only, translates the base English track concurrently via local LiteLLM proxy (`minimax-m3.1-flash`, measured; override with `ANI_CLI_SYNC_LLM_MODEL`), producing synchronized German dialogue (`--sid=1`, bottom) and Traditional Chinese + Hanyu Pinyin (`--secondary-sid=2`, top) with persistent caching in `~/.cache/ani-cli/subtitles/`.
 
 ## Episode Offset Resolution & Precedence
 
@@ -54,7 +54,7 @@ Translation runs through the local LiteLLM proxy in `subtitles.py`, batched
 The default model must be non-reasoning: a reasoning model spends its budget before
 emitting any content, and a 50-cue batch then does not finish inside the socket timeout.
 
-A tiered model failover cascade (`DEFAULT_FALLBACK_MODELS = ("minimax-m3", "minimax-m3.1-flash", "gemini-3.1-flash-lite")`) protects against quota exhaustion:
+A tiered model failover cascade (`DEFAULT_FALLBACK_MODELS = ("minimax-m3.1-flash", "gemini-3.1-flash-lite")`) protects against quota exhaustion:
 - **HTTP 429 Quota Exhaustion**: Fast-fails immediately without retrying the exhausted model, advancing the episode translation to the next candidate model.
 - **HTTP 502/503 Transient Errors**: Bounded retry with exponential backoff before escalating to the next candidate.
 - **Override Precedence**: `ANI_CLI_SYNC_LLM_MODELS` (comma-separated list) > `ANI_CLI_SYNC_LLM_MODEL` (single override) > `DEFAULT_FALLBACK_MODELS`.
@@ -99,9 +99,9 @@ Measured 2026-10-24, one real 50-cue batch per model through the shipped code pa
 
 | model | wall | note |
 |---|---|---|
-| `gemini-3.1-flash-lite` | 2.9s | tertiary fallback; fastest; no same-model backup |
-| `minimax-m3` | 7.6s | primary default; Token Plan; same-model Go backup |
-| `minimax-m3.1-flash` | 15.9s | secondary fallback; Token Plan; same-model Go backup |
+| `gemini-3.1-flash-lite` | 2.9s | secondary fallback; fastest; no same-model backup |
+| `minimax-m3.1-flash` | 15.9s | primary default; Token Plan; same-model Go backup |
+| `minimax-m3` | 7.6s | qualified but superseded by the M3.1 generation |
 | `gemini-3.8-flash` | 9.2s | HTTP 429 quota exhausted on this workload |
 | `qwen-3.8-flash` | 39.6s | correct output, too slow to sit in front of playback |
 | `glm-5.3-flash` | 45.0s | exceeds the 45s per-batch socket timeout |

@@ -28,23 +28,23 @@ from __future__ import annotations
 #   "backup"   -- True when the gateway holds a same-model fallback deployment
 #                 under ADR-006's strict same-model fallback boundary
 TRANSLATION_MODELS: dict[str, dict[str, object]] = {
-    "minimax-m3": {
-        "tier": "T2",
-        "seconds": 7.6,
-        "backup": True,
-        "note": "primary default; Token Plan; ADR-001 non-reasoning model",
-    },
     "minimax-m3.1-flash": {
         "tier": "T2",
         "seconds": 15.9,
         "backup": True,
-        "note": "secondary fallback; Token Plan",
+        "note": "primary default; Token Plan; current MiniMax generation",
     },
     "gemini-3.1-flash-lite": {
         "tier": "T2",
         "seconds": 2.9,
         "backup": False,
-        "note": "tertiary fallback; fastest; covers shared Token Plan exhaustion",
+        "note": "secondary fallback; fastest; covers shared Token Plan exhaustion",
+    },
+    "minimax-m3": {
+        "tier": "T2",
+        "seconds": 7.6,
+        "backup": True,
+        "note": "qualified but superseded by the M3.1 generation",
     },
     "qwen-3.8-flash": {
         "tier": "T2",

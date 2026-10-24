@@ -71,7 +71,7 @@ class TestRegistryDetectionHasANegativeCase(unittest.TestCase):
         self.assertFalse(is_retired("not-a-real-model-handle"))
 
     def test_known_handle_is_detected_as_registered(self):
-        self.assertTrue(is_registered("minimax-m3"))
+        self.assertTrue(is_registered("minimax-m3.1-flash"))
 
     def test_removed_handle_would_be_caught(self):
         """Inject a retired handle into the cascade and prove it is caught.
@@ -79,7 +79,7 @@ class TestRegistryDetectionHasANegativeCase(unittest.TestCase):
         This is the sensitivity probe for the guard, expressed as a test: if
         the detection were removed, this case would no longer fail.
         """
-        broken = ("minimax-m3", "gemini-2.5-flash")
+        broken = ("minimax-m3.1-flash", "gemini-2.5-flash")
         caught = [m for m in broken if not is_registered(m) or is_retired(m)]
         self.assertEqual(
             caught,

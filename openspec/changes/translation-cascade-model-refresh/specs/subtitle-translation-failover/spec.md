@@ -20,7 +20,7 @@ unknown model handle.
 
 #### Scenario: Default model cascade
 - **WHEN** no custom model list is configured via `ANI_CLI_SYNC_LLM_MODELS`
-- **THEN** the pipeline resolves the default prioritized cascade (`minimax-m3`, `minimax-m3.1-flash`, `gemini-3.1-flash-lite`)
+- **THEN** the pipeline resolves the default prioritized cascade (`minimax-m3.1-flash`, `gemini-3.1-flash-lite`)
 
 #### Scenario: Every default candidate is a live gateway handle
 - **WHEN** the default cascade is resolved

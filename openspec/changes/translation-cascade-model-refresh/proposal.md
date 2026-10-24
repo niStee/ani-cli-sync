@@ -39,16 +39,15 @@ Serves issue: [#92](https://github.com/niStee/ani-cli-sync/issues/92)
 
 - Replace the two dead default candidates with live, tier-T2-governed models
   that each answer the translation workload.
-- Keep `minimax-m3` as the primary: it is the ADR-001-recommended
-  non-reasoning model, it is the fastest candidate that also has a
-  same-model backup deployment under ADR-006, and its measured German output
-  is sound.
-- Add `minimax-m3.1-flash` as the second candidate: the current MiniMax
-  generation, tier T2, with the same-model OpenCode Go backup, and the second
-  fastest measured candidate that survives a quota event.
-- Add `gemini-3.1-flash-lite` as the third candidate: the measured-fastest
-  model (2.9s), which covers the case where both MiniMax deployments are
-  quota-exhausted on the shared Token Plan.
+- Make `minimax-m3.1-flash` the primary: it is the current MiniMax
+  generation, tier T2, with a same-model OpenCode Go backup under ADR-006,
+  and its measured German output is sound.
+- Add `gemini-3.1-flash-lite` as the second candidate: the measured-fastest
+  model (2.9s), which covers the case where the MiniMax Token Plan
+  deployment is quota-exhausted.
+- Retire `minimax-m3` from the cascade. It measured faster (7.6s) and is
+  still registered and reachable, but the M3.1 generation supersedes it, and
+  a smaller cascade spends fewer retries per failover.
 - Update the cascade recorded in `docs/adr/ADR-001` section 3 and in
   `AGENTS.md`, so the documentation does not describe a cascade that cannot
   run.
