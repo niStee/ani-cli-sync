@@ -40,8 +40,18 @@ tracks each season starting from episode 1. `resolve_episode_offset()` resolves 
 | Slime Season 2 Part 2 | 1–12 | 1–12 | +0 |
 | Slime Season 3 | 1–24 | 1–24 | +0 |
 | Slime Season 4 | 1–24 | 1–24 | +0 |
+| Attack on Titan: The Final Season Part 1 | 1–16 | 1–16 | +0 |
+| Attack on Titan: The Final Season Part 2 | 1–12 | 1–12 | +0 |
 
 **Static Overrides**: To force a specific search string or override automatic chain resolution, append a tuple to `_EPISODE_OFFSETS` in `cli.py`. Standard multi-season shows are computed automatically.
+
+**Entry order is load-bearing.** The table is scanned linearly and the first
+fragment match wins, so a longer, more specific fragment must be listed
+before a shorter one it contains. *Attack on Titan* is the concrete case: the
+Part 1 fragment (`Attack on Titan Final Season`) is a substring of the Part 2
+display title, so the Part 2 entries must precede the Part 1 entries. Every
+entry also carries a season bound, so an out-of-range AniList episode is not
+remapped into a neighbouring season.
 
 ## Subtitle Translation & Synchronization Architecture
 

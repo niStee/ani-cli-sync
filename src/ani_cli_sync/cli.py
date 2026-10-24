@@ -483,6 +483,15 @@ _EPISODE_OFFSETS: list[tuple[str, str | None, int, int]] = [
     # Overlord III & IV: provider uses per-season numbering, offset 0 guards against prequel chain
     ("Overlord III", "Overlord III", 13, 0),
     ("Overlord IV", "Overlord IV", 13, 0),
+    # Attack on Titan: The Final Season Part 2: AniList 1-12 → provider "Attack on Titan: Final Season, Part 2" 1-12.
+    # Part 2 entries MUST precede the Part 1 entries: the Part 1 fragment is a substring of the
+    # Part 2 display title, so a Part 1-first order would swallow every Part 2 episode.
+    ("Attack on Titan Final Season Part 2", "Attack on Titan: Final Season, Part 2", 12, 0),
+    ("Attack on Titan: The Final Season Part 2", "Attack on Titan: Final Season, Part 2", 12, 0),
+    ("Shingeki no Kyojin: The Final Season Part 2", "Attack on Titan: Final Season, Part 2", 12, 0),
+    # Attack on Titan: The Final Season Part 1: AniList 1-16 → provider "Attack on Titan: Final Season, Part 1" 1-16.
+    ("Attack on Titan Final Season", "Attack on Titan: Final Season, Part 1", 16, 0),
+    ("Shingeki no Kyojin: The Final Season", "Attack on Titan: Final Season, Part 1", 16, 0),
 ]
 
 

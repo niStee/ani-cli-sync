@@ -286,6 +286,70 @@ class TestResolveEpisodeOffset(unittest.TestCase):
                 f"_EPISODE_OFFSETS fragment '{fragment}' is suspiciously short",
             )
 
+    # ── Attack on Titan: The Final Season ─────────────────────────────────────
+    # The provider released Part 1 and Part 2 as separate titles, and AniList's
+    # relation graph does not express that split the way the prequel walker
+    # expects. Without a static table entry the walker sums unrelated seasons
+    # and the episode number lands far outside the requested season.
+    def test_aot_final_season_part1_ep1_resolves_to_part1(self):
+        """Part 1 resolves to its own release with the season-relative episode number."""
+        search, ep = resolve_episode_offset(
+            "[00/16] Attack on Titan Final Season | Shingeki no Kyojin: The Final Season",
+            "Shingeki no Kyojin: The Final Season",
+            1,
+            computed_offset=59,
+        )
+        self.assertEqual(ep, 1)
+        self.assertEqual(search, "Attack on Titan: Final Season, Part 1")
+
+    def test_aot_final_season_part2_ep1_resolves_to_part2(self):
+        """Part 2 resolves to its own release with the season-relative episode number."""
+        search, ep = resolve_episode_offset(
+            "[00/12] Attack on Titan Final Season Part 2 | Shingeki no Kyojin: The Final Season Part 2",
+            "Shingeki no Kyojin: The Final Season Part 2",
+            1,
+            computed_offset=75,
+        )
+        self.assertEqual(ep, 1)
+        self.assertEqual(search, "Attack on Titan: Final Season, Part 2")
+
+    def test_aot_part2_title_does_not_match_the_part1_entry(self):
+        """The Part 1 fragment is a substring of the Part 2 title; Part 2 must win.
+
+        This is the ordering constraint: with the Part 1 entry listed first,
+        every Part 2 episode would be sent to the Part 1 release.
+        """
+        search, ep = resolve_episode_offset(
+            "[00/12] Attack on Titan Final Season Part 2 | Attack on Titan: The Final Season Part 2",
+            "Attack on Titan: The Final Season Part 2",
+            5,
+            computed_offset=75,
+        )
+        self.assertEqual(ep, 5)
+        self.assertEqual(search, "Attack on Titan: Final Season, Part 2")
+
+    def test_aot_episode_beyond_season_bound_is_not_remapped(self):
+        """A season bound keeps an out-of-range episode out of the table entry."""
+        search, ep = resolve_episode_offset(
+            "[00/16] Attack on Titan Final Season | Shingeki no Kyojin: The Final Season",
+            "Shingeki no Kyojin: The Final Season",
+            17,
+            computed_offset=59,
+        )
+        self.assertNotEqual(search, "Attack on Titan: Final Season, Part 1")
+        self.assertNotEqual(ep, 17)
+
+    def test_aot_table_entry_does_not_displace_the_computed_prequel_offset(self):
+        """Negative half of the pair: an unlisted series still uses the computed chain."""
+        search, ep = resolve_episode_offset(
+            "[00/12] Some Unlisted Series Season 2 | Some Unlisted Series 2",
+            "Some Unlisted Series 2",
+            3,
+            computed_offset=12,
+        )
+        self.assertEqual(ep, 15)
+        self.assertEqual(search, "Some Unlisted Series 2")
+
     def test_no_offset_beyond_max_ep(self):
         """Episode > max_anilist_ep: offset must NOT be applied (avoid double-offset)."""
         _, ep = resolve_episode_offset(
