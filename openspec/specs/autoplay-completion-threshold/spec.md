@@ -1,7 +1,7 @@
 # autoplay-completion-threshold Specification
 
 ## Purpose
-Evaluates media playback completion using effective duration adjusted for skipped intros/outros and industry-standard completion ratios (80%–85%) to prevent false-negative early quit stops.
+Evaluates media playback completion using effective duration adjusted for skipped intros/outros and a completion ratio (70% when skip metadata is known, 80% otherwise) to prevent false-negative early quit stops.
 
 ## Requirements
 
