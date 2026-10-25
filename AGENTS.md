@@ -22,7 +22,7 @@ Automated AniList synchronization wrapper for [`ani-cli`](https://github.com/pys
    - **Tier 3 (Identity)**: Fallback 1-to-1 numbering.
 3. **Completion, Boundary Enforcement & Sequel Rollover**: Auto-transitions status to `COMPLETED` when `ep >= total`. Queries AniList for released TV/ONA sequels with a clobber guard (resumes at `progress + 1` if already in list, prompts in interactive mode or seamlessly continues in `--autoplay`).
 4. **Zero Third-Party Runtime Dependencies**: Implemented strictly with standard library (`urllib.request`, `json`, `argparse`, `subprocess`, `pathlib`, `concurrent.futures`).
-5. **Automated Subtitle Fallback & Dual-Track Pipeline**: Inspects stream tracks (detecting forced tracks `< 50` cues vs. full dialogue). When target tracks are missing or signs-only, translates the base English track concurrently via local LiteLLM proxy (`minimax-m3`, measured; override with `ANI_CLI_SYNC_LLM_MODEL`), producing synchronized German dialogue (`--sid=1`, bottom) and Traditional Chinese + Hanyu Pinyin (`--secondary-sid=2`, top) with persistent caching in `~/.cache/ani-cli/subtitles/`.
+5. **Automated Subtitle Fallback & On-Demand Dual-Track Pipeline**: Inspects stream tracks (detecting forced tracks `< 50` cues vs. full dialogue). When target tracks are missing or signs-only, translates the base English track concurrently via local LiteLLM proxy (`minimax-m3.1-flash`, measured; override with `ANI_CLI_SYNC_LLM_MODEL`), producing synchronized German dialogue (`--sid=1`, bottom) with persistent caching in `~/.cache/ani-cli/subtitles/`. The secondary track is **disabled by default**: it is attached and activated (`--secondary-sid=2`, top) only when a secondary language is requested via `--sub-secondary` or `ANI_CLI_SYNC_SUB_SECONDARY`. Requesting `en` attaches the stream's English track directly without a translation round trip.
 
 ## Episode Offset Resolution & Precedence
 
@@ -40,8 +40,18 @@ tracks each season starting from episode 1. `resolve_episode_offset()` resolves 
 | Slime Season 2 Part 2 | 1–12 | 1–12 | +0 |
 | Slime Season 3 | 1–24 | 1–24 | +0 |
 | Slime Season 4 | 1–24 | 1–24 | +0 |
+| Attack on Titan: The Final Season Part 1 | 1–16 | 1–16 | +0 |
+| Attack on Titan: The Final Season Part 2 | 1–12 | 1–12 | +0 |
 
 **Static Overrides**: To force a specific search string or override automatic chain resolution, append a tuple to `_EPISODE_OFFSETS` in `cli.py`. Standard multi-season shows are computed automatically.
+
+**Entry order is load-bearing.** The table is scanned linearly and the first
+fragment match wins, so a longer, more specific fragment must be listed
+before a shorter one it contains. *Attack on Titan* is the concrete case: the
+Part 1 fragment (`Attack on Titan Final Season`) is a substring of the Part 2
+display title, so the Part 2 entries must precede the Part 1 entries. Every
+entry also carries a season bound, so an out-of-range AniList episode is not
+remapped into a neighbouring season.
 
 ## Subtitle Translation & Synchronization Architecture
 
@@ -54,18 +64,57 @@ Translation runs through the local LiteLLM proxy in `subtitles.py`, batched
 The default model must be non-reasoning: a reasoning model spends its budget before
 emitting any content, and a 50-cue batch then does not finish inside the socket timeout.
 
-A tiered model failover cascade (`DEFAULT_FALLBACK_MODELS = ("minimax-m3", "gemini-2.5-flash", "llm-tower")`) protects against quota exhaustion:
+A tiered model failover cascade (`DEFAULT_FALLBACK_MODELS = ("minimax-m3.1-flash", "gemini-3.1-flash-lite")`) protects against quota exhaustion:
 - **HTTP 429 Quota Exhaustion**: Fast-fails immediately without retrying the exhausted model, advancing the episode translation to the next candidate model.
 - **HTTP 502/503 Transient Errors**: Bounded retry with exponential backoff before escalating to the next candidate.
 - **Override Precedence**: `ANI_CLI_SYNC_LLM_MODELS` (comma-separated list) > `ANI_CLI_SYNC_LLM_MODEL` (single override) > `DEFAULT_FALLBACK_MODELS`.
 
-Measured 2026-10-05, one real 50-cue AoT S1 ep6 batch through the shipped code path:
+### Model Governance Contract (the rule that catches dead handles)
+
+A model handle is only usable if it is **registered in ai-infra's
+`home/dot_config/litellm/model-governance.json`**. The local LiteLLM gateway
+validates every requested handle against that registry and **fails closed**
+on an undeclared model, so an unregistered name never reaches a provider.
+
+Consequences for this repo:
+
+- Every member of `DEFAULT_FALLBACK_MODELS` MUST be registered in
+  `model-governance.json` and reachable at `http://localhost:4000/v1`. A
+  default member that the gateway rejects as unknown is a dead failover: the
+  cascade walks into it only when it matters most (a quota event on the
+  primary), burning a retry per dead entry before it can advance.
+- The registry lives in **ai-infra**, not here. This repo consumes handles;
+  it never edits the gateway config or the registry.
+- **Before adding or changing a cascade member, verify it against the live
+  gateway**, not against memory. Read-only probe, no generation:
+
+  ```bash
+  curl -s http://localhost:4000/v1/models | python3 -c "import json,sys; print([m['id'] for m in json.load(sys.stdin)['data']])"
+  ```
+
+  A handle that is absent from that list answers HTTP 400 and is unusable.
+- The offline source of truth for "is this handle registered" is the vendored
+  list in `src/ani_cli_sync/model_registry.py`, checked by
+  `tests/test_model_registry.py`. The live probe above is the cross-check;
+  the vendored list is what CI can assert without a running proxy.
+
+**Lesson (2026-10-24):** the cascade shipped `gemini-2.5-flash` and
+`llm-tower` after both were removed from the gateway on 2026-07-21 (ai-infra
+commit `1f26d7a`). They answered HTTP 400 for months, unnoticed, because
+the cascade is only exercised on a quota exhaustion. A guard test now pins
+every default member against the vendored registry.
+
+Measured 2026-10-24, one real 50-cue batch per model through the shipped code path
+(against the local proxy):
 
 | model | wall | note |
 |---|---|---|
-| `minimax-m3` | 17.5s | primary default; Token Plan |
-| `gemini-2.5-flash` | 19.2s | secondary fallback |
-| `llm-tower` | 24.1s | tertiary local host fallback |
+| `gemini-3.1-flash-lite` | 2.9s | secondary fallback; fastest; no same-model backup |
+| `minimax-m3.1-flash` | 15.9s | primary default; Token Plan; same-model Go backup |
+| `minimax-m3` | 7.6s | qualified but superseded by the M3.1 generation |
+| `gemini-3.8-flash` | 9.2s | HTTP 429 quota exhausted on this workload |
+| `qwen-3.8-flash` | 39.6s | correct output, too slow to sit in front of playback |
+| `glm-5.3-flash` | 45.0s | exceeds the 45s per-batch socket timeout |
 | `minimax-m2.7-highspeed` | 29.9s | Token Plan |
 | `minimax-m2.7` | 31.8s | Token Plan |
 | `deepseek-v4-flash` | 139.4s | reasoning model; stalls the episode |
@@ -79,7 +128,9 @@ failure still cost the slowest sibling's full budget -- that was a 180s stall.
 
 The OpenCode Go `backup-minimax-*` deployments are `rpm: 2, max_parallel_requests: 1`, so a
 failover onto them serialises 5 batch workers and is a latency trap for this workload; the
-direct Token Plan deployments and `llm-tower` are the ones that matter.
+direct Token Plan deployments are the ones that matter. `llm-tower` is **not** a
+translation endpoint: its inference ports do not answer, and the fleet manifest
+deploys only `actions-runner` to that node, so no fleet health check maintains it.
 
 
 ## Commands & Testing
@@ -88,8 +139,8 @@ direct Token Plan deployments and `llm-tower` are the ones that matter.
 # Run unit test suite
 PYTHONPATH=src python3 -m unittest discover -s tests
 
-# Lint
-ruff check src/ tests/
+# Lint (the baseline is 0: the whole tracked repo must be ruff-clean)
+ruff check .
 
 # Lint debt ratchet (what CI gates on)
 python3 scripts/ruff_count_ratchet.py
@@ -117,7 +168,7 @@ played through**. Closing the player window must always stop the chain, never sk
 | mpv exit | elapsed watch time | outcome |
 |---|---|---|
 | non-zero | any | **stop** - treated as the user closing the player |
-| 0 | `>= 85%` of effective duration (`duration - skip_seconds`) when skips present | advance |
+| 0 | `>= 70%` of effective duration (`duration - skip_seconds`) when skips present | advance |
 | 0 | `>= 80%` of probed duration when skips absent | advance |
 | 0 | otherwise (user closed early) | **stop** |
 | 0 | duration unknown | advance only at `>= 1150s - skip_seconds` |
@@ -127,6 +178,12 @@ skips occur (`ani-skip`), `skip_seconds` is subtracted so an episode with skippe
 and ED (~90s) is not falsely classified as an early quit. Without skip metadata, an 80%
 baseline (matching PlexTraktSync and Trakt standards) allows manual skips without stalling.
 When probing fails or in the `no_sub_fallback` path, the 1150s fallback (~19.2 minutes) applies.
+
+**The two ratios answer different questions.** The 70% skip-aware floor applies when the
+tracker knows non-narrative content was skipped, so the floor is relaxed: affected releases
+carry recaps and credits beyond the marked OP/ED, which the skip metadata does not cover.
+The 80% no-skip floor applies when the user may have skipped manually, so it stays strict.
+Relaxing the wrong one would let a closed player window look like a completed episode.
 
 **Why the previous logic was wrong.** It advanced on any non-zero exit (so closing mpv
 skipped the episode) and treated any zero exit past a flat `600s` threshold as "finished",
@@ -338,15 +395,36 @@ Lower the baseline deliberately as findings are fixed:
 python3 scripts/ruff_count_ratchet.py --update
 ```
 
-### The local pre-commit hook is not this gate
+### The local pre-commit hook is stricter than this gate
 
-The global git hook (ai-infra managed, `core.hooksPath`) runs `ruff check --quiet .`. Two
-differences from the CI ratchet, both of which make it weaker:
+The global git hook (ai-infra managed, `core.hooksPath`) lints the **staged snapshot** of
+each staged Python file, per file:
 
-- It is a **directory walk**, so untracked scratch and nested worktrees inflate it.
-- It is guarded by `command -v ruff`, so with ruff absent it **silently passes**.
+```bash
+git show ":$p" | ruff check --quiet --stdin-filename="$p" -
+```
 
-CI is the only enforced lint signal in this repository.
+There is **no baseline allowance**. A staged file that carries pre-existing findings
+blocks the commit even when the change under review adds none. So the hook is stricter
+than the CI ratchet, which only compares a repo-wide count against the baseline.
+
+Consequences:
+
+- A commit that stages a file with existing findings needs those findings cleared
+  (or the baseline lowered via `--update`) first. Do not reach for `--no-verify`:
+  CI's ratchet is the enforced signal, and bypassing the hook locally hides a real
+  gate instead of resolving it.
+- The hook fails loudly when `ruff` is absent (it requires the staged Python set to be
+  lintable). The CI ratchet, by contrast, exits `3` (external failure) rather than
+  silently passing when ruff cannot run.
+- The pre-push hook's Python block is guarded by
+  `ls pyproject.toml setup.cfg requirements*.txt`, and `ls` exits non-zero when **any**
+  named file is missing. This repository has `pyproject.toml` but neither `setup.cfg` nor
+  `requirements*.txt`, so the whole Python block (ruff + pytest) is skipped at push
+  time. Do not rely on that: it is an accident of the file layout, not a policy.
+
+CI is the only *enforced* lint signal in this repository, but the local hook is a real
+gate in practice. Keep the working tree ruff-clean so both pass.
 
 ### Merge queue
 
