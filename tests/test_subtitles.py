@@ -458,12 +458,178 @@ class TestSubtitleTranslationAndPlanning(unittest.TestCase):
             # German translated once, Chinese never translated
             self.assertEqual(mock_translate.call_count, 1)
             self.assertEqual(mock_translate.call_args[1]["target_lang"], "de")
-            # Secondary track falls back to stream English and is attached as track 2,
-            # but inactive on startup (secondary_sid=0) so it only opens on demand (Ctrl+j).
+            # No secondary language was requested, so the stream English track is
+            # omitted entirely and the secondary track stays disabled. Only the
+            # primary track is attached.
+            self.assertEqual(len(plan.sub_files), 1)
+            self.assertEqual(plan.sub_files[0], str(tmp_dir / "slime_ep15_de.vtt"))
+            self.assertEqual(plan.sid, 1)
+            self.assertEqual(plan.secondary_sid, 0)
+
+    @patch("ani_cli_sync.subtitles.translate_cues_llm")
+    @patch("ani_cli_sync.subtitles.fetch_vtt_text")
+    def test_prepare_subtitles_explicit_secondary_en_is_not_translated(
+        self, mock_fetch, mock_translate
+    ):
+        """English is the language of the source track, so it must not be translated."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp_dir = Path(td)
+            mock_fetch.return_value = SAMPLE_VTT
+            mock_translate.return_value = parse_vtt(SAMPLE_VTT)
+
+            info = StreamInfo(
+                video_link="https://stream.example/1080/index.m3u8",
+                referrer="https://zokoanime.video/",
+                subtitles=[
+                    {
+                        "lang": "en",
+                        "label": "English (CR)",
+                        "src": "https://stream.example/en.vtt",
+                    }
+                ],
+            )
+
+            plan = prepare_subtitles(
+                info,
+                "slime",
+                15,
+                primary_lang="de",
+                secondary_lang="en",
+                cache_dir=tmp_dir,
+            )
+
+            # The English track is attached as the secondary track...
             self.assertEqual(len(plan.sub_files), 2)
             self.assertEqual(plan.sub_files[1], "https://stream.example/en.vtt")
             self.assertEqual(plan.sid, 1)
+            self.assertEqual(plan.secondary_sid, 2)
+            # ...and it was not round-tripped through the model. Only the primary
+            # German track needed a translation.
+            self.assertEqual(mock_translate.call_count, 1)
+            self.assertEqual(mock_translate.call_args[1]["target_lang"], "de")
+
+    @patch("ani_cli_sync.subtitles.translate_cues_llm")
+    @patch("ani_cli_sync.subtitles.fetch_vtt_text")
+    def test_prepare_subtitles_requested_secondary_unavailable_leaves_secondary_off(
+        self, mock_fetch, mock_translate
+    ):
+        """A secondary track that could not be produced must not be pointed at."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp_dir = Path(td)
+            mock_fetch.return_value = SAMPLE_VTT
+            # The translation produces nothing, so no secondary track exists.
+            mock_translate.side_effect = lambda *a, **k: None
+
+            info = StreamInfo(
+                video_link="https://stream.example/1080/index.m3u8",
+                referrer="https://zokoanime.video/",
+                subtitles=[
+                    {
+                        "lang": "en",
+                        "label": "English (CR)",
+                        "src": "https://stream.example/en.vtt",
+                    }
+                ],
+            )
+
+            plan = prepare_subtitles(
+                info,
+                "slime",
+                15,
+                primary_lang="de",
+                secondary_lang="zh-pinyin",
+                cache_dir=tmp_dir,
+            )
+
+            # Only the primary track is attached and no secondary index is set.
+            self.assertEqual(len(plan.sub_files), 1)
+            self.assertEqual(plan.sid, 1)
             self.assertEqual(plan.secondary_sid, 0)
+
+    @patch("ani_cli_sync.subtitles.translate_cues_llm")
+    @patch("ani_cli_sync.subtitles.fetch_vtt_text")
+    def test_prepare_subtitles_english_primary_when_german_translation_fails(
+        self, mock_fetch, mock_translate
+    ):
+        """The stream's English track stays the primary when German is unavailable."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp_dir = Path(td)
+            mock_fetch.return_value = SAMPLE_VTT
+            # The German translation fails, so no German primary track exists.
+            mock_translate.side_effect = lambda *a, **k: None
+
+            info = StreamInfo(
+                video_link="https://stream.example/1080/index.m3u8",
+                referrer="https://zokoanime.video/",
+                subtitles=[
+                    {
+                        "lang": "en",
+                        "label": "English (CR)",
+                        "src": "https://stream.example/en.vtt",
+                    }
+                ],
+            )
+
+            plan = prepare_subtitles(
+                info,
+                "slime",
+                15,
+                primary_lang="de",
+                cache_dir=tmp_dir,
+            )
+
+            # The English track is the primary rather than an unrequested secondary.
+            self.assertEqual(len(plan.sub_files), 1)
+            self.assertEqual(plan.sub_files[0], "https://stream.example/en.vtt")
+            self.assertEqual(plan.sid, 1)
+            self.assertEqual(plan.secondary_sid, 0)
+
+    @patch("ani_cli_sync.subtitles.translate_cues_llm")
+    @patch("ani_cli_sync.subtitles.fetch_vtt_text")
+    def test_prepare_subtitles_requested_secondary_keeps_english_primary_when_german_fails(
+        self, mock_fetch, mock_translate
+    ):
+        """A failed German primary must not demote the requested secondary track."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp_dir = Path(td)
+            mock_fetch.return_value = SAMPLE_VTT
+            cues = parse_vtt(SAMPLE_VTT)
+
+            def translate(base_cues, target_lang=None, **kwargs):
+                # German fails; the requested secondary language succeeds.
+                if target_lang == "de":
+                    return None
+                return list(cues)
+
+            mock_translate.side_effect = translate
+
+            info = StreamInfo(
+                video_link="https://stream.example/1080/index.m3u8",
+                referrer="https://zokoanime.video/",
+                subtitles=[
+                    {
+                        "lang": "en",
+                        "label": "English (CR)",
+                        "src": "https://stream.example/en.vtt",
+                    }
+                ],
+            )
+
+            plan = prepare_subtitles(
+                info,
+                "slime",
+                15,
+                primary_lang="de",
+                secondary_lang="zh-pinyin",
+                cache_dir=tmp_dir,
+            )
+
+            # The English track remains the primary at index 0 and the requested
+            # secondary sits at index 1, so it is genuinely secondary.
+            self.assertEqual(len(plan.sub_files), 2)
+            self.assertEqual(plan.sub_files[0], "https://stream.example/en.vtt")
+            self.assertEqual(plan.sid, 1)
+            self.assertEqual(plan.secondary_sid, 2)
 
     @patch("ani_cli_sync.subtitles.translate_cues_llm")
     @patch("ani_cli_sync.subtitles.fetch_vtt_text")
@@ -1061,7 +1227,7 @@ class TestTranslationDefaults(unittest.TestCase):
     """
 
     def test_default_model_is_a_non_reasoning_model(self):
-        self.assertEqual(DEFAULT_MODEL, "minimax-m3")
+        self.assertEqual(DEFAULT_MODEL, "minimax-m3.1-flash")
 
     def test_default_model_is_overridable_by_env(self):
         import importlib
@@ -1292,7 +1458,9 @@ class TestTieredTranslationFailover(unittest.TestCase):
     def test_get_candidate_models_default(self):
         with patch.dict(os.environ, {}, clear=True):
             models = get_candidate_models()
-            self.assertEqual(models, ["minimax-m3", "gemini-2.5-flash", "llm-tower"])
+            self.assertEqual(
+                models, ["minimax-m3.1-flash", "gemini-3.1-flash-lite"]
+            )
 
     def test_get_candidate_models_single_override(self):
         with patch.dict(

@@ -39,10 +39,14 @@ logger = logging.getLogger(__name__)
 
 FORCED_CUE_THRESHOLD = 50
 DEFAULT_API_BASE = os.environ.get("LITELLM_API_BASE", "http://localhost:4000/v1")
+# Every member must be a handle the local LiteLLM gateway accepts, i.e. one
+# registered in ai-infra's model-governance.json. The gateway fails closed on an
+# undeclared handle, so a dead member here is a failover that walks into HTTP
+# 400 exactly when the cascade is needed. See AGENTS.md, "Model Governance
+# Contract", and the vendored registry in ani_cli_sync.model_registry.
 DEFAULT_FALLBACK_MODELS: tuple[str, ...] = (
-    "minimax-m3",
-    "gemini-2.5-flash",
-    "llm-tower",
+    "minimax-m3.1-flash",
+    "gemini-3.1-flash-lite",
 )
 DEFAULT_MODEL = os.environ.get("ANI_CLI_SYNC_LLM_MODEL", DEFAULT_FALLBACK_MODELS[0])
 
@@ -879,8 +883,8 @@ def prepare_subtitles(
     2. Inspects stream tracks: if stream has full primary (cue_count >= 50), uses it.
     3. If primary is missing/forced, translates using base English track.
     4. If secondary_lang is explicitly requested and missing, translates on demand.
-    5. If secondary_lang is None and stream has English, attaches English as secondary track
-       for on-demand toggle (e.g. mpv Ctrl+j) with secondary_sid=0 (inactive on startup).
+    5. If secondary_lang is None, the secondary track is disabled (secondary_sid = 0)
+       and the stream's English track is not attached.
     6. Caches all generated files and returns an MPV SubtitlePlan.
     """
     if cache_dir is None:
@@ -945,9 +949,13 @@ def prepare_subtitles(
         except (urllib.error.URLError, OSError) as e:
             logger.debug("Failed to fetch stream German subtitle: %s", e)
 
-    # If primary or on-demand secondary still need generation, download base English track
+    # If primary or on-demand secondary still need generation, download base English track.
+    # A secondary language of "en" is already the language of the source track, so
+    # translating it would be a pointless round trip that still burns a model call.
     needs_primary_translation = not primary_file
-    needs_secondary_translation = bool(secondary_lang and not secondary_file)
+    needs_secondary_translation = bool(
+        secondary_lang and secondary_lang != "en" and not secondary_file
+    )
 
     if (needs_primary_translation or needs_secondary_translation) and stream_en_url:
         try:
@@ -994,14 +1002,21 @@ def prepare_subtitles(
         sub_files.append(primary_file)
     elif stream_de_url:
         sub_files.append(stream_de_url)
-
-    if secondary_file:
-        sub_files.append(secondary_file)
-    elif stream_en_url and stream_en_url not in sub_files:
+    elif stream_en_url:
         sub_files.append(stream_en_url)
 
-    # Adjust track indices if tracks are missing
-    if len(sub_files) < 2:
+    # The secondary track is attached only when one was explicitly requested.
+    # Without a request there is nothing to attach, and the stream's English track
+    # is left out rather than fetched and loaded for a viewer who never opens it.
+    if secondary_lang:
+        if secondary_file:
+            sub_files.append(secondary_file)
+        elif stream_en_url and stream_en_url not in sub_files:
+            sub_files.append(stream_en_url)
+
+    # A secondary track that was requested but could not be produced must not leave
+    # the player pointing at a track index that does not exist.
+    if not secondary_lang or len(sub_files) < 2:
         secondary_sid = 0
 
     return SubtitlePlan(sub_files=sub_files, sid=sid, secondary_sid=secondary_sid)

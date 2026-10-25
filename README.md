@@ -189,12 +189,12 @@ When watching anime, provider subtitle tracks are frequently incomplete (e.g. Ge
 2. **Deterministic Stream Sync**: Uses the stream's full English WebVTT track directly from the HLS manifest as the structural foundation, guaranteeing **0ms timing drift** and matching intro/outro cuts without slow audio-correlation alignment.
 3. **Optimized Concurrent Translation**:
    - **Primary Subtitle (`--sid=1`, bottom)**: Natural, localized German dialogue translated via the local LiteLLM proxy (`deepseek-v4-flash`).
-   - **Secondary Subtitle (`--secondary-sid=2`, top)**:
-     - By default, falls back directly to the stream's English track with **0s translation latency**.
-     - **On-demand CJK learning track** (`--sub-secondary zh-pinyin` / `ANI_CLI_SYNC_SUB_SECONDARY=zh-pinyin`): Generates two-line cues with context-accurate Hanyu Pinyin with tone marks (resolving *duōyīnzì* polyphones like 銀行 *háng* vs. 行走 *xíng*) on top and Traditional Chinese (繁體中文) on bottom.
+   - **Secondary Subtitle (`--secondary-sid=2`, top)**: **Disabled by default.** It is attached and activated only when a secondary language is requested.
+     - **On-demand English** (`--sub-secondary en` / `ANI_CLI_SYNC_SUB_SECONDARY=en`): Uses the stream's English track directly, with **0s translation latency**.
+     - **On-demand CJK learning track** (`--sub-secondary zh-pinyin`): Generates two-line cues with context-accurate Hanyu Pinyin with tone marks (resolving *duōyīnzì* polyphones like 銀行 *háng* vs. 行走 *xíng*) on top and Traditional Chinese (繁體中文) on bottom.
 4. **Lookahead Background Prefetching**: When Episode $N$ begins playback, a background daemon thread quietly pre-fetches and prepares subtitles for Episode $N+1$. When you finish the episode, the next episode launches with **0s wait time**.
 5. **Local Disk Caching**: Generated files are stored at `~/.cache/ani-cli/subtitles/{anime_slug}_ep{ep}_{lang}.vtt`. Subsequent viewings yield a **0.0003s instant cache hit**.
-6. **Clean Player Integration**: Passes all tracks to `mpv` along with the original stream English track, allowing seamless on-the-fly track switching (`k` / `Alt+j`).
+6. **Clean Player Integration**: Passes the resolved tracks to `mpv`, allowing seamless on-the-fly track switching (`k` / `Alt+j`).
 
 ---
 
