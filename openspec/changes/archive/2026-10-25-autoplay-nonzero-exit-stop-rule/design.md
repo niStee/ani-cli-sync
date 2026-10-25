@@ -112,12 +112,19 @@ from a neighbouring case:
 | `test_abnormal_exit_reason_names_the_exit_not_the_duration` (new) | the stop reason names the exit, and the early-quit case still names the duration | the reported-cause clause |
 
 The two new progression tests matter because the two pre-existing tests
-exercise the exit check at a point where a duration rule would also have
-stopped the chain. A full-length non-zero exit and a skip-regime non-zero
-exit both clear every threshold on elapsed time alone, so only the exit status
-can stop them. Without these tests, removing the exit check would still have
-been caught -- but only by the short-duration cases, and the spec's two
-consequential scenarios would have had no direct assertion.
+cover different regimes. `test_nonzero_exit_never_advances` exits after 60s of
+a 1440s episode, which is short of the 80% baseline, so a duration rule would
+also have stopped that chain. `test_unknown_duration_nonzero_exit_still_stops`
+exits after 1500s with an unknown duration, which is *past* the 1150s fallback,
+so on elapsed time alone it would advance -- it therefore already detects the
+removal of the exit guard, but does not pin the reported cause.
+
+A full-length non-zero exit and a skip-regime non-zero exit both clear every
+threshold on elapsed time alone, so only the exit status can stop them, and
+they are the spec's two consequential scenarios. Without these tests, removing
+the exit check would still have been caught -- but only by the short-duration
+and unknown-duration cases, and the spec's two consequential scenarios would
+have had no direct assertion.
 
 `test_abnormal_exit_reason_names_the_exit_not_the_duration` ships as a
 positive/negative pair: the abnormal exit reports the exit, and a normal

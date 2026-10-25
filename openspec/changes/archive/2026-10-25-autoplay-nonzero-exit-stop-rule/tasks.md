@@ -21,14 +21,24 @@
 originally added no test, on the reasoning that two existing tests already
 assert the behaviour. That reasoning was incomplete.
 
-The two pre-existing tests both exercise the exit check at a point where a
-duration rule would *also* have stopped the chain: exit 1 after 60s of a
-1440s episode, and exit 2 after 1500s with unknown duration. Neither
-distinguishes "the exit status stopped this" from "the duration stopped
-this". The spec's two consequential scenarios -- a non-zero exit at full
-duration, and a non-zero exit in the skip regime -- clear every elapsed-time
-threshold on their own, so the exit status is the only thing that can stop
-them, and neither scenario had a direct assertion.
+The two pre-existing tests cover two different regimes, and neither is the
+spec's scenario.
+
+`test_nonzero_exit_never_advances` exits after 60s of a 1440s episode, which
+is short of the 80% baseline, so a duration rule would *also* have stopped the
+chain. That case does not distinguish "the exit status stopped this" from "the
+duration stopped this".
+
+`test_unknown_duration_nonzero_exit_still_stops` exits after 1500s with an
+unknown duration, which is *past* the 1150s fallback, so on elapsed time alone
+it would advance. That case therefore already detects the removal of the exit
+guard (it fails by advancing, as mutation A showed). What it does not pin is
+which cause is reported.
+
+The spec's two consequential scenarios -- a non-zero exit at full duration, and
+a non-zero exit in the skip regime -- clear every elapsed-time threshold on
+their own, so the exit status is the only thing that can stop them, and
+neither scenario had a direct assertion.
 
 Three tests were therefore added, one per scenario, plus the reported-cause
 pair.
