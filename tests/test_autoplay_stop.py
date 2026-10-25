@@ -32,6 +32,37 @@ class TestAutoplayStopSemantics(unittest.TestCase):
         self.assertFalse(advance)
         self.assertIn("exit", reason)
 
+    def test_nonzero_exit_after_full_duration_does_not_advance(self):
+        # The spec's known-duration scenario: the whole episode was watched, then the
+        # player ended abnormally. Elapsed time alone would have cleared every
+        # threshold, so only the exit status can stop the chain here.
+        advance, reason = _should_advance(1, 1440.0, self.DURATION)
+        self.assertFalse(advance)
+        self.assertIn("exit", reason)
+
+    def test_nonzero_exit_after_skips_does_not_advance(self):
+        # The spec's skip scenario: 1463s total, 176s skipped, 1308s elapsed. Under
+        # the skip-aware ratio this is comfortably past the threshold, so the exit
+        # status is the only thing that can stop the chain.
+        advance, reason = _should_advance(1, 1308.0, 1463.0, skip_seconds=176.0)
+        self.assertFalse(advance)
+        self.assertIn("exit", reason)
+
+    def test_abnormal_exit_reason_names_the_exit_not_the_duration(self):
+        # The stop reason is user-visible ("Playback stopped (..., {why})"), so the
+        # abnormal exit must be the reported cause rather than a duration shortfall.
+        # A duration-based reason would tell the user the episode was too short when
+        # the player had actually failed.
+        _, reason = _should_advance(1, 60.0, self.DURATION)
+        self.assertIn("exit", reason)
+        self.assertNotIn("stopped after", reason)
+
+        # The positive half of the pair: a normal early quit still reports the
+        # duration, so the two causes remain distinguishable.
+        _, reason = _should_advance(0, 60.0, self.DURATION)
+        self.assertIn("stopped after", reason)
+        self.assertNotIn("exit", reason)
+
     def test_closing_after_ten_minutes_does_not_advance(self):
         # 660s into a 1440s episode: the user closed the window.
         advance, reason = _should_advance(0, 660.0, self.DURATION)
