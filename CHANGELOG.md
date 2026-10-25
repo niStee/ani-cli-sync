@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.10.0](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.9.0...ani-cli-sync-v0.10.0) (2026-10-25)
+
+
+### Features
+
+* **subtitles:** disable the secondary subtitle track by default ([#102](https://github.com/niStee/ani-cli-sync/issues/102)) ([d0a9832](https://github.com/niStee/ani-cli-sync/commit/d0a98329e30db8eec6540224a675eb75b4902217))
+
+
+### Bug Fixes
+
+* **autoplay:** lower the skip-aware completion ratio to 0.70 ([#100](https://github.com/niStee/ani-cli-sync/issues/100)) ([63f3764](https://github.com/niStee/ani-cli-sync/commit/63f37640c8ef757aca8e8b89fc7c2085c20829b7))
+* **cli:** add Attack on Titan Final Season Part 1 and Part 2 offset mapping ([#98](https://github.com/niStee/ani-cli-sync/issues/98)) ([81198c6](https://github.com/niStee/ani-cli-sync/commit/81198c6ed186b67f5a6ec8289fc8f842d0906ec3))
+* **subtitles:** replace dead model handles in the translation cascade ([#93](https://github.com/niStee/ani-cli-sync/issues/93)) ([d457ed3](https://github.com/niStee/ani-cli-sync/commit/d457ed391ffa2004ae1c41f9ea8006fb11006697))
+* **sync:** anchor Slime Season 2 Part 2 offset table entries to franchise titles ([#83](https://github.com/niStee/ani-cli-sync/issues/83)) ([341461a](https://github.com/niStee/ani-cli-sync/commit/341461a55ad168ab1f54658d3a5f0de7cd426bd7))
+
 ## [0.9.0](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.8.0...ani-cli-sync-v0.9.0) (2026-10-16)
 
 
