@@ -19,7 +19,7 @@ Automated subtitle translation and media synchronization pipelines frequently su
 ## Decision Drivers
 
 - **Zero Runtime Dependencies**: The core package must run purely on Python standard library modules (`urllib.request`, `json`, `dataclasses`, `concurrent.futures`, `time`). Optional extras (like VAD) remain strictly decoupled.
-- **Instant Video Startup**: Playback must never hang or stall on translation or synchronization; fallbacks must be fast, deterministic, and graceful.
+- **Graceful Video Startup**: Translation and synchronization must fail gracefully: failures warn and fall back instead of hanging playback. They are not latency-free. A cold translation, a model failover, and the 45s per-batch socket timeout can each delay playback, so no absolute startup-time guarantee is made here.
 - **Linguistic Precision**: Consistent register (informal German), accurate idiomatic translation, and dialogue continuity without multi-agent token overhead.
 - **AniList Safety**: Never clobber or advance user watchlist progress on incomplete or unverified playback.
 - **Spec-Driven Quality**: OpenSpec SDD workflow, ADR-012 sensitivity probes, and strict ratchet enforcement.
@@ -50,7 +50,15 @@ Automated subtitle translation and media synchronization pipelines frequently su
   2. Fastest measured tier-T2 model (`gemini-3.1-flash-lite`)
 - **Fast Failover**: Immediate circuit break on HTTP 429 (no retries, instantly advance to next candidate model). Exponential backoff only on transient 503/502.
 - **Governed Handles**: A candidate is usable only if it is registered in ai-infra's `model-governance.json` and reachable through the local gateway. The gateway fails closed on an undeclared handle, so an unregistered member is a dead failover that burns a retry on HTTP 400 exactly when the cascade is needed. The offline registry is vendored in `ani_cli_sync.model_registry` and pinned by `tests/test_model_registry.py`; the live cross-check is `curl http://localhost:4000/v1/models`.
-- **Amendment 2026-10-24**: The cascade previously named `gemini-2.5-flash` and `llm-tower`. Both were removed from the gateway on 2026-07-21 (ai-infra `1f26d7a`) and answered HTTP 400 for months, unnoticed, because the cascade is only exercised on a quota exhaustion of the primary model. They are replaced by the three measured, tier-T2-governed models above. `llm-tower` is deliberately not restored: its inference ports do not answer and the fleet manifest deploys only `actions-runner` to that node, so no fleet health check maintains it.
+- **Amendment 2026-10-24**: The cascade previously named `gemini-2.5-flash` and `llm-tower`. Both were removed from the gateway on 2026-07-21 (ai-infra `1f26d7a`) and answered HTTP 400 for months, unnoticed, because the cascade is only exercised on a quota exhaustion of the primary model. They are replaced by the two governed models above. `llm-tower` is deliberately not restored: its inference ports do not answer and the fleet manifest deploys only `actions-runner` to that node, so no fleet health check maintains it.
+
+### 3.1 Service Boundary: An External HTTP Program, Not a Python Dependency
+
+- **Rule**: The gateway is an **external HTTP service**, not a Python runtime dependency. The core package keeps zero Python runtime dependencies and reaches the gateway over the standard library (`urllib.request`). No LiteLLM Python SDK is installed or imported.
+- **Scope**: The service is contacted per track that actually has to be synthesized. A cached generated track, or a native track that already carries the requested language, avoids the request for that track; the decision is per track, so an uncached, non-English secondary track is still translated even when the primary track was served from cache.
+- **Authentication**: The client sends a fixed `Authorization: Bearer dummy` header, which suits a normally local proxy that accepts it. `LITELLM_API_KEY` is not read and does not configure authentication; there is no API-key support, and this ADR does not introduce one.
+- **Operator responsibility**: The operator provisions and runs the service separately. The project neither installs nor starts it, and the base URL override (`LITELLM_API_BASE`) is read once at module import.
+- **Out of scope here**: authentication configurability, VAD redesign, and any change to the cascade members.
 
 ### 4. Lightweight ONNX-First Neural VAD & Theme Song Immunity
 
