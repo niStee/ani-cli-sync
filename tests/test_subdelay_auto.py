@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -69,6 +71,16 @@ class TestAutoSubDelay(unittest.TestCase):
     def test_negligible_offset_not_applied(self):
         # Sub-0.05s is imperceptible; emitting a flag for it is noise.
         self.assertEqual(self._run(measure=_result(0.01)), 0.0)
+
+    def test_negligible_boundary_0_04_is_not_applied(self):
+        # 0.04 sits below the 0.05 gate. Magnitudes form a continuous interval, so
+        # there is no largest value below the gate; the pair only pins the strict
+        # inequality (0.05 itself is applied, see the boundary test below).
+        self.assertEqual(self._run(measure=_result(0.04)), 0.0)
+
+    def test_non_negligible_boundary_0_05_is_applied(self):
+        # Exactly 0.05 is the first applied magnitude: the gate is strictly '<'.
+        self.assertAlmostEqual(self._run(measure=_result(0.05)), 0.05, places=9)
 
     def test_no_subtitle_track_does_not_shift(self):
         self.assertEqual(self._run(plan=NO_PLAN, measure=_result(-3.37)), 0.0)
@@ -158,7 +170,7 @@ class TestPerEpisodeMeasurement(unittest.TestCase):
     INFO = StreamInfo(video_link="https://hls.example/1080/index.m3u8", referrer="https://zokoanime.video/")
     PLAN = SubtitlePlan(sub_files=["/cache/de.vtt"], sid=1, secondary_sid=0)
 
-    def _drive(self, returncode: int = 0, measurements: tuple = ()):
+    def _drive(self, returncode: int = 0, measurements: tuple = (), no_sub_fallback: bool = False, dub: bool = False):
         """Run cmd_watch over two episodes on the subtitles path. Returns the mocks."""
         import ani_cli_sync.cli as cli_module
 
@@ -176,8 +188,13 @@ class TestPerEpisodeMeasurement(unittest.TestCase):
         measure = MagicMock(side_effect=list(measurements))
         probe = MagicMock(return_value=None)
         update = MagicMock()
+        # The native ani-cli branch calls prepare_menu_env, which writes the menu
+        # helper into XDG_CACHE_HOME; keep that off the real cache directory.
+        cache_home = tempfile.TemporaryDirectory()
+        self.addCleanup(cache_home.cleanup)
 
         with (
+            patch.dict(os.environ, {"XDG_CACHE_HOME": cache_home.name}),
             patch.object(cli_module, "get_token", return_value="tok"),
             patch.object(cli_module, "get_viewer", return_value={"id": 42, "name": "nils"}),
             patch.object(cli_module, "get_watching_list", return_value=[TWO_EPISODE_ENTRY]),
@@ -200,7 +217,13 @@ class TestPerEpisodeMeasurement(unittest.TestCase):
             patch("ani_cli_sync.subsync.vad_available", return_value=True),
             patch("ani_cli_sync.subsync.measure_offset", measure),
         ):
-            cli_module.cmd_watch(query="Show", autoplay=True, sub_sync="auto")
+            cli_module.cmd_watch(
+                query="Show",
+                autoplay=True,
+                sub_sync="auto",
+                no_sub_fallback=no_sub_fallback,
+                dub=dub,
+            )
 
         return build_mpv, measure, probe, update
 
@@ -219,6 +242,24 @@ class TestPerEpisodeMeasurement(unittest.TestCase):
         _, _, probe, update = self._drive(returncode=1, measurements=(_result(-3.37),))
         self.assertEqual(probe.call_count, 0, "duration was fetched for a non-zero exit")
         update.assert_not_called()
+
+    def test_failed_second_measurement_leaves_no_inherited_shift(self):
+        """Episode 2's confident shift must not reach episode 3 when its own
+        measurement fails: the offset is a property of one subtitle file."""
+        build_mpv, _, _, update = self._drive(measurements=(_result(-3.37), None))
+        self.assertEqual([c.kwargs["sub_delay"] for c in build_mpv.call_args_list], [-3.37, 0.0])
+        # Accepted non-final playback submits CURRENT; the final episode submits COMPLETED.
+        self.assertIn(call("tok", 100, 2, status="CURRENT"), update.call_args_list)
+        self.assertIn(call("tok", 100, 3, status="COMPLETED"), update.call_args_list)
+
+    def test_unsupported_playback_paths_never_measure(self):
+        """--no-sub-fallback and --dub bypass the managed subtitle path entirely,
+        so no automatic measurement may run under either flag."""
+        for flags in ({"no_sub_fallback": True}, {"dub": True}):
+            with self.subTest(**flags):
+                build_mpv, measure, _, _ = self._drive(measurements=(_result(-3.37),), **flags)
+                self.assertEqual(measure.call_count, 0, "measurement ran on an unsupported path")
+                self.assertEqual(build_mpv.call_count, 0, "managed mpv command built on an unsupported path")
 
 
 if __name__ == "__main__":
