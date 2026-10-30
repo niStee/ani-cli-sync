@@ -77,10 +77,23 @@ def _git(repo_root: Path, *args: str) -> subprocess.CompletedProcess | None:
         return None
 
 
+def _git_ok(repo_root: Path, *args: str) -> subprocess.CompletedProcess | None:
+    """The process of a git command that succeeded, or None when it failed.
+
+    Git reports a missing object, an unknown ref and a broken command the same way: a
+    non-zero exit status. Every caller below treats a non-zero status as a failure, so
+    the check lives here once rather than being repeated at each call site.
+    """
+    proc = _git(repo_root, *args)
+    if proc is None or proc.returncode != 0:
+        return None
+    return proc
+
+
 def tracked_files(repo_root: Path) -> list[str] | None:
     """Tracked Python files, or None when the scan cannot run."""
-    proc = _git(repo_root, "ls-files", "-z", "--", *SCAN_GLOBS)
-    if proc is None or proc.returncode != 0:
+    proc = _git_ok(repo_root, "ls-files", "-z", "--", *SCAN_GLOBS)
+    if proc is None:
         return None
     files = [f for f in proc.stdout.split("\0") if f]
     return files
@@ -139,20 +152,20 @@ def baseline_at_ref(repo_root: Path, ref: str, baseline: Path) -> int | None:
     indistinguishable. ``ls-tree`` exits 0 with empty output for an absent path and
     non-zero for a name it will not look up.
     """
-    resolve = _git(repo_root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
-    if resolve is None or resolve.returncode != 0:
+    resolve = _git_ok(repo_root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+    if resolve is None:
         return None
     try:
         rel = baseline.resolve().relative_to(repo_root.resolve()).as_posix()
     except ValueError:
         return None
-    proc = _git(repo_root, "ls-tree", ref, "--", rel)
-    if proc is None or proc.returncode != 0:
+    proc = _git_ok(repo_root, "ls-tree", ref, "--", rel)
+    if proc is None:
         return None
     if not proc.stdout.strip():
         return None
-    proc = _git(repo_root, "show", f"{ref}:{rel}")
-    if proc is None or proc.returncode != 0:
+    proc = _git_ok(repo_root, "show", f"{ref}:{rel}")
+    if proc is None:
         return None
     try:
         return int(proc.stdout.strip())
@@ -172,59 +185,59 @@ def baseline_absent_at_ref(repo_root: Path, ref: str, baseline: Path) -> bool:
     compare against" would fail open on a typo'd ref or a missing git binary, which is
     the one outcome a ratchet must never produce.
     """
-    resolve = _git(repo_root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
-    if resolve is None or resolve.returncode != 0:
+    resolve = _git_ok(repo_root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+    if resolve is None:
         return False
     try:
         rel = baseline.resolve().relative_to(repo_root.resolve()).as_posix()
     except ValueError:
         return False
-    proc = _git(repo_root, "ls-tree", ref, "--", rel)
-    if proc is None or proc.returncode != 0:
+    proc = _git_ok(repo_root, "ls-tree", ref, "--", rel)
+    if proc is None:
         return False
     return not proc.stdout.strip()
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo-root", default=".", help="Repository root (default: cwd)")
-    parser.add_argument("--baseline", default=None, help="Baseline count file")
-    parser.add_argument("--update", action="store_true", help="Lower the baseline when the count improved")
-    parser.add_argument("--base-ref", help="Git ref to compare the baseline against")
-    args = parser.parse_args(argv)
+def _base_ref_outcome(repo_root: Path, baseline_path: Path, base_ref: str) -> int | None:
+    """The exit status of the base-ref comparison, or None when the gate continues.
 
-    repo_root = Path(args.repo_root).resolve()
-    baseline_path = (
-        Path(args.baseline).resolve()
-        if args.baseline
-        else (repo_root / "scripts" / BASELINE_NAME)
-    )
+    The bootstrap case is not terminal: it reports that the ref records no baseline yet,
+    so there is no earlier value that could be raised, and the normal ratchet still runs.
+    Every other outcome here is terminal and never writes the baseline.
+    """
+    if baseline_absent_at_ref(repo_root, base_ref, baseline_path):
+        print(
+            f"bootstrap: {base_ref} records no baseline yet, so there is no "
+            "earlier value to raise. The one-directional check starts once this "
+            "baseline lands."
+        )
+        return None
+    base = baseline_at_ref(repo_root, base_ref, baseline_path)
+    if base is None:
+        print(f"error: could not read the baseline at {base_ref}", file=sys.stderr)
+        return EXIT_EXTERNAL
+    current = read_baseline(baseline_path)
+    if current is None:
+        print("error: baseline missing or malformed", file=sys.stderr)
+        return EXIT_CONFIG
+    if current > base:
+        print(
+            f"BASELINE RAISED: {base} -> {current} (+{current - base}) against "
+            f"{base_ref}. The baseline may only fall. Fix the findings "
+            "instead of widening the allowance.",
+            file=sys.stderr,
+        )
+        return EXIT_REGRESSION
+    return None
 
-    if args.base_ref and baseline_path.is_file():
-        if baseline_absent_at_ref(repo_root, args.base_ref, baseline_path):
-            print(
-                f"bootstrap: {args.base_ref} records no baseline yet, so there is no "
-                "earlier value to raise. The one-directional check starts once this "
-                "baseline lands."
-            )
-        else:
-            base = baseline_at_ref(repo_root, args.base_ref, baseline_path)
-            if base is None:
-                print(f"error: could not read the baseline at {args.base_ref}", file=sys.stderr)
-                return EXIT_EXTERNAL
-            current = read_baseline(baseline_path)
-            if current is None:
-                print("error: baseline missing or malformed", file=sys.stderr)
-                return EXIT_CONFIG
-            if current > base:
-                print(
-                    f"BASELINE RAISED: {base} -> {current} (+{current - base}) against "
-                    f"{args.base_ref}. The baseline may only fall. Fix the findings "
-                    "instead of widening the allowance.",
-                    file=sys.stderr,
-                )
-                return EXIT_REGRESSION
 
+def _ratchet_outcome(repo_root: Path, baseline_path: Path, update: bool) -> int:
+    """The exit status of the measured count against the local baseline.
+
+    The baseline is written only for a lower count combined with ``--update``, and the
+    write happens before the message that reports it, so a failing write never leaves a
+    message claiming the baseline was lowered.
+    """
     baseline = read_baseline(baseline_path)
     if baseline is None:
         print(
@@ -247,21 +260,45 @@ def main(argv: list[str] | None = None) -> int:
         )
         return EXIT_REGRESSION
 
-    if count < baseline:
-        if args.update:
-            write_baseline(baseline_path, count)
-            print(f"improved {baseline} -> {count} (-{baseline - count}). Baseline lowered.")
-            return EXIT_OK
-        print(
-            f"BASELINE STALE: {count} violations < baseline {baseline} "
-            f"(-{baseline - count}). Run with --update to lower the baseline and close "
-            "the slack.",
-            file=sys.stderr,
-        )
-        return EXIT_REGRESSION
+    if count == baseline:
+        print(f"OK (count == baseline {baseline}).")
+        return EXIT_OK
 
-    print(f"OK (count == baseline {baseline}).")
-    return EXIT_OK
+    if update:
+        write_baseline(baseline_path, count)
+        print(f"improved {baseline} -> {count} (-{baseline - count}). Baseline lowered.")
+        return EXIT_OK
+
+    print(
+        f"BASELINE STALE: {count} violations < baseline {baseline} "
+        f"(-{baseline - count}). Run with --update to lower the baseline and close "
+        "the slack.",
+        file=sys.stderr,
+    )
+    return EXIT_REGRESSION
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo-root", default=".", help="Repository root (default: cwd)")
+    parser.add_argument("--baseline", default=None, help="Baseline count file")
+    parser.add_argument("--update", action="store_true", help="Lower the baseline when the count improved")
+    parser.add_argument("--base-ref", help="Git ref to compare the baseline against")
+    args = parser.parse_args(argv)
+
+    repo_root = Path(args.repo_root).resolve()
+    baseline_path = (
+        Path(args.baseline).resolve()
+        if args.baseline
+        else (repo_root / "scripts" / BASELINE_NAME)
+    )
+
+    if args.base_ref and baseline_path.is_file():
+        outcome = _base_ref_outcome(repo_root, baseline_path, args.base_ref)
+        if outcome is not None:
+            return outcome
+
+    return _ratchet_outcome(repo_root, baseline_path, args.update)
 
 
 if __name__ == "__main__":
