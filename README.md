@@ -128,6 +128,8 @@ Export your viewing history from Netflix (`NetflixViewingHistory.csv`) and impor
 ani-cli-sync import-netflix ~/Downloads/NetflixViewingHistory.csv
 ```
 
+For export steps, privacy, mapping evidence, exit codes, and reruns, see the [Netflix viewing-history import guide](docs/netflix-viewing-history-import.md).
+
 ---
 
 ## ⚙️ CLI Reference
