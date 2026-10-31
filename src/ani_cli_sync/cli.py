@@ -115,6 +115,7 @@ def get_watching_list(token: str, user_id: int) -> list[dict]:
                             english
                         }
                         episodes
+                        duration
                     }
                 }
             }
@@ -180,6 +181,7 @@ def find_sequel(media_id: int, token: str | None = None) -> tuple[dict | None, s
                             english
                         }
                         episodes
+                        duration
                         format
                         status
                     }
@@ -230,6 +232,7 @@ def search_anime(title: str) -> dict | None:
                 english
             }
             episodes
+            duration
         }
     }
     """
@@ -624,6 +627,30 @@ _DEFAULT_WATCHED_RATIO = 0.80
 _SKIP_AWARE_WATCHED_RATIO = 0.70
 
 
+def _anilist_duration_seconds(minutes) -> float | None:
+    """Convert an AniList ``Media.duration`` into seconds, or ``None`` when unusable.
+
+    AniList reports the general length of an episode in minutes. It is *general*,
+    not release-specific, so it is only ever a fallback behind the probed HLS
+    duration.
+
+    Only a positive integer counts as usable. Everything else is rejected on
+    purpose, because a coerced value would produce a bogus completion threshold:
+
+    - ``bool`` is an ``int`` subclass in Python, so ``True`` would become 60s.
+    - A float, a numeric string, ``NaN`` or an infinity is not an AniList ``Int``.
+    - Zero or a negative value would allow an immediate completion.
+
+    Returns ``None`` for every rejected value so the caller falls through to the
+    conservative constant instead of raising.
+    """
+    if isinstance(minutes, bool) or not isinstance(minutes, int):
+        return None
+    if minutes <= 0:
+        return None
+    return float(minutes) * 60.0
+
+
 def _calculate_skip_seconds(stream_info) -> float:
     """Calculate total expected seconds skipped via intro and outro markers."""
     if not stream_info:
@@ -643,6 +670,7 @@ def _should_advance(
     elapsed: float,
     duration: float | None,
     skip_seconds: float = 0.0,
+    anilist_duration_seconds: float | None = None,
 ) -> tuple[bool, str]:
     """Decide whether autoplay may continue to the next episode.
 
@@ -662,18 +690,34 @@ def _should_advance(
     content was skipped; the affected releases carry recaps and credits beyond the
     marked OP/ED, which the skip metadata does not cover. Without skip metadata, an 80%
     baseline (matching PlexTraktSync and Trakt standards) allows manual skips without
-    false early-stop halts. When duration is unknown, 1150s (~19.2m) serves as the
-    fallback floor.
+    false early-stop halts.
+
+    The duration evidence is read in a strict order:
+
+    1. ``duration`` -- the probed HLS playlist total. It describes the release that was
+       actually played, so it outranks everything else.
+    2. ``anilist_duration_seconds`` -- the selected media's general AniList episode
+       length. It is a fallback for the paths that never resolve stream information
+       (``--dub``, ``--no-sub-fallback``), not a replacement for the probe.
+    3. The unchanged 1150s (~19.2m) constant, minus known skips.
+
+    A non-zero exit stops before any of this is consulted.
     """
     if returncode != 0:
         return False, f"player exited with code {returncode}"
 
+    effective_duration = None
     if duration:
+        effective_duration = duration
+    elif anilist_duration_seconds:
+        effective_duration = anilist_duration_seconds
+
+    if effective_duration is not None:
         if skip_seconds > 0:
-            effective_duration = max(0.0, duration - skip_seconds)
+            effective_duration = max(0.0, effective_duration - skip_seconds)
             threshold = effective_duration * _SKIP_AWARE_WATCHED_RATIO
         else:
-            threshold = duration * _DEFAULT_WATCHED_RATIO
+            threshold = effective_duration * _DEFAULT_WATCHED_RATIO
     else:
         threshold = max(0.0, _FALLBACK_COMPLETE_SECONDS - skip_seconds)
 
@@ -817,6 +861,9 @@ def cmd_watch(
 
     # Build fzf menu options
     lines = []
+    # AniList episode length in minutes, keyed by media id. It is metadata, not
+    # display identity, so it never enters the fzf line format.
+    media_duration_minutes: dict[int, object] = {}
     for e in entries:
         media = e["media"]
         romaji = media["title"]["romaji"] or ""
@@ -824,6 +871,8 @@ def cmd_watch(
         total = media["episodes"] or "?"
         curr = e["progress"]
         lines.append(f"[{curr:02d}/{total}] {english} | {romaji} ###{e['mediaId']}###{curr}###{total}")
+        if "duration" in media:
+            media_duration_minutes[e["mediaId"]] = media["duration"]
 
     selected_line = None
     if query:
@@ -852,6 +901,8 @@ def cmd_watch(
             english = media["title"].get("english") or romaji
             total = media["episodes"] or "?"
             media_id = media["id"]
+            if "duration" in media:
+                media_duration_minutes[media_id] = media["duration"]
             update_progress(token, media_id, 1, status="CURRENT")
             selected_line = f"[00/{total}] {english} | {romaji} ###{media_id}###0###{total}"
         else:
@@ -887,6 +938,11 @@ def cmd_watch(
     total_eps_str = line_parts[3] if len(line_parts) > 3 else "?"
     total_eps = int(total_eps_str) if total_eps_str.isdigit() else None
     next_ep = current_ep + 1
+
+    # Duration evidence for the media that was actually selected. The lookup is by
+    # media id, so it follows the selection (fzf, manual, watchlist match or global
+    # search) instead of a title guess, and it needs no extra request.
+    anilist_duration_minutes = media_duration_minutes.get(media_id)
 
     # Extract search query (prefer romaji or english)
     title_search = display_part.split("] ")[1].split(" | ")[0]
@@ -1033,7 +1089,16 @@ def cmd_watch(
         # refines the zero-exit case, so don't pay for a playlist fetch we won't use.
         duration = _probe_duration(stream_info) if ret.returncode == 0 else None
         skip_seconds = _calculate_skip_seconds(stream_info) if ret.returncode == 0 else 0.0
-        advance, why = _should_advance(ret.returncode, elapsed, duration, skip_seconds=skip_seconds)
+        # The AniList length is only consulted when the probe found nothing, and it
+        # is derived from the selected media, so it costs no extra request.
+        anilist_duration = _anilist_duration_seconds(anilist_duration_minutes)
+        advance, why = _should_advance(
+            ret.returncode,
+            elapsed,
+            duration,
+            skip_seconds=skip_seconds,
+            anilist_duration_seconds=anilist_duration,
+        )
         if not advance:
             mins = int(elapsed // 60)
             secs = int(elapsed % 60)
@@ -1106,6 +1171,9 @@ def cmd_watch(
             title_search = sequel_rom or sequel_eng
             display_part = f"[00/{total_eps_str}] {sequel_eng} | {sequel_rom}"
             curr_ep_to_play = start_ep
+            # Replace, never inherit: a missing or invalid sequel duration makes the
+            # metadata unknown, so the previous season's length cannot leak forward.
+            anilist_duration_minutes = sequel_node.get("duration")
             continue
 
         if autoplay:

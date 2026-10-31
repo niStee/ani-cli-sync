@@ -241,7 +241,6 @@ The duration is summed from the HLS media playlist (`#EXTINF`). When automated i
 skips occur (`ani-skip`), `skip_seconds` is subtracted so an episode with skipped OP (~90s)
 and ED (~90s) is not falsely classified as an early quit. Without skip metadata, an 80%
 baseline (matching PlexTraktSync and Trakt standards) allows manual skips without stalling.
-When probing fails or in the `no_sub_fallback` path, the 1150s fallback (~19.2 minutes) applies.
 
 **The two ratios answer different questions.** The 70% skip-aware floor applies when the
 tracker knows non-narrative content was skipped, so the floor is relaxed: affected releases
@@ -249,10 +248,41 @@ carry recaps and credits beyond the marked OP/ED, which the skip metadata does n
 The 80% no-skip floor applies when the user may have skipped manually, so it stays strict.
 Relaxing the wrong one would let a closed player window look like a completed episode.
 
+### Duration evidence: three tiers
+
+The completion threshold is derived from the first usable duration source, in this order:
+
+1. **HLS playlist total** - the probed release-specific duration (`#EXTINF` sum). It describes
+   the cut that was actually played, so it always wins over metadata.
+2. **AniList `Media.duration`** - the general episode length in minutes, converted once to
+   seconds (`minutes * 60`). This is the fallback for the paths that never resolve stream
+   information (`--dub`, `--no-sub-fallback`). It is *general* metadata, not release-specific
+   evidence, which is exactly why it only ranks behind the probe.
+3. **The 1150-second constant** (~19.2 minutes), minus known skips. This tier is unchanged and
+   is not scaled by a ratio; it is the conservative last resort.
+
+When tier 2 or tier 1 supplies the duration, the existing 70%/80% ratio applies to it. A
+non-zero exit stops before any tier is consulted.
+
+**Only a positive integer is usable AniList metadata.** Null, missing, boolean, non-integer
+(float, numeric string), zero, negative, NaN and infinity are all rejected, so a malformed
+value falls through to the 1150-second constant instead of producing a zero or negative
+completion threshold. `bool` needs its own rejection because Python's `bool` is an `int`
+subclass and `True` would otherwise coerce to 60 seconds.
+
+**The duration follows the selected media, and no extra request is made.** The value travels
+with the media id, so it survives every selection route (watchlist match, global search, fzf,
+manual picker) without a title lookup. On sequel rollover it is **replaced** by the sequel's
+own duration from the existing sequel relation query; a missing or invalid sequel duration
+becomes unknown rather than inheriting the previous season's value. The three existing
+AniList queries (watchlist, global search, sequel relations) request `duration` in their
+current selection sets - there is no per-episode metadata request.
+
 **Why the previous logic was wrong.** It advanced on any non-zero exit (so closing mpv
 skipped the episode) and treated any zero exit past a flat `600s` threshold as "finished",
 which advanced even when the user had closed the window early. Both are corrected by
-`_should_advance()` in `cli.py`, covered by `tests/test_autoplay_stop.py`.
+`_should_advance()` in `cli.py`, covered by `tests/test_autoplay_stop.py` and
+`tests/test_autoplay_duration_fallback.py`.
 
 ## Subtitle Sync Offset (`--sub-delay`)
 
