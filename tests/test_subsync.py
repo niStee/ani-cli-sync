@@ -224,6 +224,97 @@ class TestFirstCueReuse(unittest.TestCase):
         self.assertIsNone(_timing_to_seconds("not a timing line"))
 
 
+BOUNDARY_VTT = """WEBVTT
+
+00:01:40.000 --> 00:01:44.000
+The first cue sits at exactly one hundred seconds
+
+00:01:50.000 --> 00:01:55.000
+A second cue follows
+"""
+
+
+class TestPlausibilityBoundary(unittest.TestCase):
+    """abs(offset) > 60 rejects; exactly 60 must still pass the plausibility limit.
+
+    The far side of the boundary is already pinned by
+    test_implausible_offset_is_not_confident (onset 500 vs cue 41.87). These two
+    pin the boundary itself.
+    """
+
+    def _measure(self, tmp: Path, onset: float):
+        sub = _write_vtt(tmp, BOUNDARY_VTT)
+        with (
+            patch("ani_cli_sync.subsync.vad_available", return_value=True),
+            patch("ani_cli_sync.subsync._extract_audio", return_value=tmp / "a.wav"),
+            patch("ani_cli_sync.subsync._first_speech_onset", return_value=onset),
+        ):
+            return measure_offset(INFO, str(sub))
+
+    def test_exactly_minus_60_is_confident(self):
+        with tempfile.TemporaryDirectory() as td:
+            r = self._measure(Path(td), onset=40.0)  # 40 - 100 = -60.0 exactly
+        self.assertIsNotNone(r)
+        self.assertTrue(r.confident, f"exactly 60 must pass the plausibility limit, got reason: {r.reason}")
+        self.assertAlmostEqual(r.offset, -60.0, places=3)
+
+    def test_just_beyond_60_is_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            r = self._measure(Path(td), onset=39.5)  # -60.5
+        self.assertFalse(r.confident)
+        self.assertIn("implausible", r.reason)
+
+
+class TestEarlyOnsetRejection(unittest.TestCase):
+    """Onsets before 0.5s are almost never dialogue (ambient intro, sting); the
+    first qualifying later segment must be used, and only-early segments mean no
+    usable speech onset."""
+
+    @staticmethod
+    def _write_wav(path: Path, seconds: float = 3.0, rate: int = 16000) -> None:
+        with wave.open(str(path), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(rate)
+            wf.writeframes(b"\x00\x01" * int(rate * seconds))
+
+    @staticmethod
+    def _vad_with_segments(starts_samples: list[int]):
+        silero = types.ModuleType("silero_vad")
+        silero.load_silero_vad = lambda: "MODEL"
+        silero.get_speech_timestamps = lambda audio, model, **_kwargs: [
+            {"start": s, "end": s + 320} for s in starts_samples
+        ]
+        return silero
+
+    @staticmethod
+    def _numpy_stub():
+        numpy = types.ModuleType("numpy")
+        numpy.float32 = "float32"
+        numpy.asarray = lambda values, dtype=None: list(values)
+        return numpy
+
+    def test_pre_half_second_onset_is_skipped_for_later_speech(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wav = Path(tmp) / "probe.wav"
+            self._write_wav(wav)
+            vad = self._vad_with_segments([3200, 32000])  # 0.2s then 2.0s at 16 kHz
+            with patch.dict(sys.modules, {"silero_vad": vad, "numpy": self._numpy_stub()}):
+                onset = _first_speech_onset(wav)
+
+        self.assertAlmostEqual(onset, 2.0, places=3)
+
+    def test_only_pre_half_second_onsets_yield_no_speech(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wav = Path(tmp) / "probe.wav"
+            self._write_wav(wav)
+            vad = self._vad_with_segments([3200])  # only a 0.2s onset
+            with patch.dict(sys.modules, {"silero_vad": vad, "numpy": self._numpy_stub()}):
+                onset = _first_speech_onset(wav)
+
+        self.assertIsNone(onset)
+
+
 if __name__ == "__main__":
     unittest.main()
 
