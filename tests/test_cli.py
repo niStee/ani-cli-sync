@@ -1,8 +1,19 @@
 from __future__ import annotations
 
+import contextlib
+import io
+import os
+import re
+import stat
+import sys
+import tempfile
 import unittest
 import unittest.mock
 import urllib.error
+from pathlib import Path
+from typing import ClassVar
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 from ani_cli_sync.cli import (
     compute_prequel_offset,
@@ -450,6 +461,12 @@ class TestWatchQueryFallback(unittest.TestCase):
                 side_effect=urllib.error.URLError("network disabled in unit test"),
             ),
             unittest.mock.patch("ani_cli_sync.subtitles.translate_cues_llm", return_value=None),
+            # The watch loop's lookahead daemon thread (target
+            # prefetch_next_episode) starts once a stream resolves. Stub it at
+            # the ani_cli_sync.subtitles boundary (the function-local import
+            # site in the watch loop) so no real resolve/prepare work outlives
+            # this mock context and races into later tests.
+            unittest.mock.patch("ani_cli_sync.subtitles.prefetch_next_episode"),
         ):
             cli_module.cmd_watch(query="Attack on Titan", autoplay=True, quality=None, dub=False)
 
@@ -1170,6 +1187,13 @@ class TestSequelHelpers(unittest.TestCase):
             ),
             unittest.mock.patch("ani_cli_sync.subtitles.resolve_stream_info", return_value=mock_stream),
             unittest.mock.patch("ani_cli_sync.subtitles.prepare_subtitles", return_value=mock_plan),
+            # The watch loop starts a daemon thread (target prefetch_next_episode)
+            # once stream_info is truthy. Stub it at the ani_cli_sync.subtitles
+            # boundary -- the watch loop imports it function-locally from there,
+            # so this is the only patch site that intercepts it. Without the stub
+            # the thread runs real resolve/prepare work after these patches expire
+            # (observed racing into later tests' subprocess.run mocks).
+            unittest.mock.patch("ani_cli_sync.subtitles.prefetch_next_episode"),
             unittest.mock.patch.object(cli_module, "update_progress", mock_update),
             unittest.mock.patch.object(cli_module.subprocess, "run", mock_subproc),
             unittest.mock.patch("builtins.input", return_value="q"),
@@ -1414,6 +1438,658 @@ class TestEpisodeProbeFallback(unittest.TestCase):
         self.assertEqual(cmd2[cmd2.index("-e") + 1], "1")
 
         self.assertEqual(cli_module._PREQUEL_OFFSET_CACHE.get(300), 0)
+
+
+class TestCmdListAuth(unittest.TestCase):
+    """Baseline for `list`: a stored token is required, an authenticated list shows
+    progress with known or unknown totals, and an empty CURRENT list is not a failure."""
+
+    @staticmethod
+    def _entry(progress: int, english: str, romaji: str, episodes: int | None, media_id: int) -> dict:
+        return {
+            "id": media_id,
+            "mediaId": media_id,
+            "progress": progress,
+            "media": {
+                "id": media_id,
+                "title": {"english": english, "romaji": romaji},
+                "episodes": episodes,
+            },
+        }
+
+    def test_missing_token_exits_1_with_login_instruction(self):
+        import ani_cli_sync.cli as cli_module
+
+        with (
+            unittest.mock.patch.object(cli_module, "get_token", return_value=None),
+            unittest.mock.patch.object(cli_module, "get_viewer") as mock_viewer,
+            contextlib.redirect_stderr(io.StringIO()) as err,
+            self.assertRaises(SystemExit) as ctx,
+        ):
+            cli_module.cmd_list()
+
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("login", err.getvalue().lower())
+        mock_viewer.assert_not_called()
+
+    def test_authenticated_list_shows_progress_and_totals(self):
+        import ani_cli_sync.cli as cli_module
+
+        entries = [
+            self._entry(4, "Frieren: Beyond Journey's End Season 2", "Sousou no Frieren 2nd Season", 10, 182255),
+            self._entry(2, "Mystery Show", "Nazomeita Show", None, 99),
+        ]
+        out = io.StringIO()
+        with (
+            unittest.mock.patch.object(cli_module, "get_token", return_value="tok"),
+            unittest.mock.patch.object(cli_module, "get_viewer", return_value={"id": 42, "name": "test-user"}),
+            unittest.mock.patch.object(cli_module, "get_watching_list", return_value=entries),
+            contextlib.redirect_stdout(out),
+        ):
+            cli_module.cmd_list()
+
+        text = out.getvalue()
+        self.assertIn("[04/10]", text)
+        self.assertIn("[02/?]", text)  # unknown total renders as '?', not a crash
+        self.assertIn("Frieren: Beyond Journey's End Season 2", text)
+        self.assertIn("Mystery Show", text)
+
+    def test_empty_current_list_is_reported_not_failed(self):
+        import ani_cli_sync.cli as cli_module
+
+        out = io.StringIO()
+        with (
+            unittest.mock.patch.object(cli_module, "get_token", return_value="tok"),
+            unittest.mock.patch.object(cli_module, "get_viewer", return_value={"id": 42, "name": "test-user"}),
+            unittest.mock.patch.object(cli_module, "get_watching_list", return_value=[]),
+            contextlib.redirect_stdout(out),
+        ):
+            cli_module.cmd_list()  # must complete without raising or exiting non-zero
+
+        self.assertIn("empty", out.getvalue().lower())
+
+
+class TestCmdLoginTokenHandling(unittest.TestCase):
+    """Baseline for `login`: the token is validated before it is saved."""
+
+    def _login(self, inputs: list[str], viewer) -> unittest.mock.MagicMock:
+        import ani_cli_sync.cli as cli_module
+
+        with (
+            unittest.mock.patch("builtins.input", side_effect=inputs),
+            unittest.mock.patch.object(cli_module, "get_viewer", viewer),
+            unittest.mock.patch.object(cli_module, "save_token") as mock_save,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            cli_module.cmd_login()
+        return mock_save
+
+    def test_validated_token_is_saved(self):
+        viewer = unittest.mock.MagicMock(return_value={"id": 7, "name": "alice"})
+        mock_save = self._login(["", "tok123"], viewer)
+        mock_save.assert_called_once_with("tok123")
+
+    def test_token_validation_failure_does_not_save(self):
+        import ani_cli_sync.cli as cli_module
+
+        with (
+            unittest.mock.patch("builtins.input", side_effect=["", "badtok"]),
+            unittest.mock.patch.object(cli_module, "get_viewer", side_effect=RuntimeError("400 Bad Request")),
+            unittest.mock.patch.object(cli_module, "save_token") as mock_save,
+            contextlib.redirect_stdout(io.StringIO()),
+            self.assertRaises(RuntimeError),
+        ):
+            cli_module.cmd_login()
+
+        mock_save.assert_not_called()
+
+    def test_token_is_extracted_from_url_fragment(self):
+        url = "https://anilist.co/api/v2/oauth/pin#access_token=frag123&token_type=Bearer"
+        viewer = unittest.mock.MagicMock(return_value={"id": 7, "name": "alice"})
+        mock_save = self._login(["", url], viewer)
+        mock_save.assert_called_once_with("frag123")
+
+    def test_saved_token_file_has_restricted_permissions(self):
+        import ani_cli_sync.cli as cli_module
+
+        with tempfile.TemporaryDirectory() as td:
+            config_dir = Path(td) / "anilist"
+            token_file = config_dir / "token"
+            with (
+                unittest.mock.patch.object(cli_module, "CONFIG_DIR", config_dir),
+                unittest.mock.patch.object(cli_module, "TOKEN_FILE", token_file),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                cli_module.save_token("  sekret  ")
+
+            self.assertEqual(token_file.read_text(encoding="utf-8"), "sekret")
+            self.assertEqual(stat.S_IMODE(os.stat(token_file).st_mode), 0o600)
+
+
+class TestCmdSetProgressBounds(unittest.TestCase):
+    """Baseline for explicit `set` progress: deliberate correction reopens an entry,
+    an unknown total never infers completion, a missing token writes nothing, and a
+    watchlist miss falls through to global search.
+
+    The above-total refusal and the at-total COMPLETED transition are already pinned
+    by TestCmdSetGuard; these complete the supported-bounds picture.
+    """
+
+    @staticmethod
+    def _media(media_id: int, episodes: int | None) -> dict:
+        return {
+            "id": media_id,
+            "title": {"english": "Show Season 1", "romaji": "Show S1"},
+            "episodes": episodes,
+        }
+
+    @staticmethod
+    def _watch_entry(progress: int, media: dict) -> dict:
+        return {"id": 1, "mediaId": media["id"], "progress": progress, "media": media}
+
+    def test_deliberate_correction_to_lower_episode_submits_current(self):
+        """Setting 3 on an entry at progress 11 must submit CURRENT 3, not refuse."""
+        import ani_cli_sync.cli as cli_module
+
+        media = self._media(100, 12)
+        with (
+            unittest.mock.patch.object(cli_module, "get_token", return_value="tok"),
+            unittest.mock.patch.object(cli_module, "get_viewer", return_value={"id": 1, "name": "u"}),
+            unittest.mock.patch.object(cli_module, "get_watching_list", return_value=[self._watch_entry(11, media)]),
+            unittest.mock.patch.object(cli_module, "update_progress") as mock_update,
+        ):
+            cli_module.cmd_set("Show Season 1", 3)
+
+        mock_update.assert_called_once_with("tok", 100, 3, status="CURRENT")
+
+    def test_unknown_total_submits_current_without_completion(self):
+        import ani_cli_sync.cli as cli_module
+
+        media = self._media(100, None)
+        with (
+            unittest.mock.patch.object(cli_module, "get_token", return_value="tok"),
+            unittest.mock.patch.object(cli_module, "get_viewer", return_value={"id": 1, "name": "u"}),
+            unittest.mock.patch.object(cli_module, "get_watching_list", return_value=[]),
+            unittest.mock.patch.object(cli_module, "search_anime", return_value=media),
+            unittest.mock.patch.object(cli_module, "update_progress") as mock_update,
+        ):
+            cli_module.cmd_set("Show Season 1", 5)
+
+        mock_update.assert_called_once_with("tok", 100, 5, status="CURRENT")
+
+    def test_missing_token_exits_1_without_any_write(self):
+        import ani_cli_sync.cli as cli_module
+
+        with (
+            unittest.mock.patch.object(cli_module, "get_token", return_value=None),
+            unittest.mock.patch.object(cli_module, "get_viewer") as mock_viewer,
+            unittest.mock.patch.object(cli_module, "get_watching_list") as mock_list,
+            unittest.mock.patch.object(cli_module, "search_anime") as mock_search,
+            unittest.mock.patch.object(cli_module, "update_progress") as mock_update,
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as ctx,
+        ):
+            cli_module.cmd_set("Show Season 1", 3)
+
+        self.assertEqual(ctx.exception.code, 1)
+        mock_viewer.assert_not_called()
+        mock_list.assert_not_called()
+        mock_search.assert_not_called()
+        mock_update.assert_not_called()
+
+    def test_no_watchlist_match_falls_back_to_global_search(self):
+        import ani_cli_sync.cli as cli_module
+
+        unrelated = self._media(777, 24)
+        global_media = self._media(555, 12)
+        with (
+            unittest.mock.patch.object(cli_module, "get_token", return_value="tok"),
+            unittest.mock.patch.object(cli_module, "get_viewer", return_value={"id": 1, "name": "u"}),
+            unittest.mock.patch.object(cli_module, "get_watching_list", return_value=[self._watch_entry(2, unrelated)]),
+            unittest.mock.patch.object(cli_module, "search_anime", return_value=global_media) as mock_search,
+            unittest.mock.patch.object(cli_module, "update_progress") as mock_update,
+        ):
+            cli_module.cmd_set("Frieren Season 2", 2)
+
+        mock_search.assert_called_once_with("Frieren Season 2")
+        mock_update.assert_called_once_with("tok", 555, 2, status="CURRENT")
+
+
+class TestCliInvocationSurface(unittest.TestCase):
+    """Baseline for the command surface: bare and option-only invocations watch,
+    a command-like watch title stays a query, help exits 0 without playback, and
+    usage errors exit 2 before any command dispatch."""
+
+    @staticmethod
+    def _clean_env() -> dict[str, str]:
+        # Parser defaults read ANI_CLI_SYNC_* at main() time; strip them so the
+        # assertions characterize the code, not this workstation's environment.
+        return {k: v for k, v in os.environ.items() if not k.startswith("ANI_CLI_SYNC_")}
+
+    def _invoke(self, argv: list[str]) -> dict:
+        import ani_cli_sync.cli as cli_module
+
+        captured: dict = {}
+
+        def fake_watch(**kwargs):
+            captured.update(kwargs)
+
+        with (
+            unittest.mock.patch.dict(os.environ, self._clean_env(), clear=True),
+            unittest.mock.patch.object(sys, "argv", argv),
+            unittest.mock.patch.object(cli_module, "cmd_watch", side_effect=fake_watch) as mock_watch,
+        ):
+            cli_module.main()
+
+        self.assertTrue(mock_watch.called, f"expected cmd_watch dispatch for {argv}")
+        return captured
+
+    def test_bare_invocation_runs_watch_workflow(self):
+        captured = self._invoke(["ani-cli-sync"])
+        self.assertIsNone(captured.get("query"))
+        # The full watch-subcommand call supplies every watch flag; the fallback
+        # else-branch in main() would leave most of them absent.
+        self.assertIs(captured.get("autoplay"), False)
+        self.assertEqual(captured.get("sub_sync"), "off")
+
+    def test_implicit_title_becomes_watch_query(self):
+        captured = self._invoke(["ani-cli-sync", "Attack on Titan"])
+        self.assertEqual(captured.get("query"), "Attack on Titan")
+
+    def test_command_like_watch_query_is_not_executed(self):
+        captured = self._invoke(["ani-cli-sync", "watch", "list"])
+        self.assertEqual(captured.get("query"), "list")
+
+    def test_help_request_exits_zero_without_playback(self):
+        import ani_cli_sync.cli as cli_module
+
+        out = io.StringIO()
+        with (
+            unittest.mock.patch.dict(os.environ, self._clean_env(), clear=True),
+            unittest.mock.patch.object(sys, "argv", ["ani-cli-sync", "--help"]),
+            unittest.mock.patch.object(cli_module, "cmd_watch") as mock_watch,
+            contextlib.redirect_stdout(out),
+            self.assertRaises(SystemExit) as ctx,
+        ):
+            cli_module.main()
+
+        self.assertEqual(ctx.exception.code, 0)
+        self.assertIn("usage:", out.getvalue())
+        mock_watch.assert_not_called()
+
+    def test_set_non_integer_episode_is_usage_error_without_dispatch(self):
+        import ani_cli_sync.cli as cli_module
+
+        with (
+            unittest.mock.patch.dict(os.environ, self._clean_env(), clear=True),
+            unittest.mock.patch.object(sys, "argv", ["ani-cli-sync", "set", "Show", "twelve"]),
+            unittest.mock.patch.object(cli_module, "cmd_set") as mock_set,
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as ctx,
+        ):
+            cli_module.main()
+
+        self.assertEqual(ctx.exception.code, 2)
+        mock_set.assert_not_called()
+
+    def test_unknown_sub_sync_value_is_usage_error_without_watch(self):
+        import ani_cli_sync.cli as cli_module
+
+        with (
+            unittest.mock.patch.dict(os.environ, self._clean_env(), clear=True),
+            unittest.mock.patch.object(sys, "argv", ["ani-cli-sync", "watch", "--sub-sync=guess"]),
+            unittest.mock.patch.object(cli_module, "cmd_watch") as mock_watch,
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as ctx,
+        ):
+            cli_module.main()
+
+        self.assertEqual(ctx.exception.code, 2)
+        mock_watch.assert_not_called()
+
+    def test_subtitle_defaults_without_env_overrides(self):
+        captured = self._invoke(["ani-cli-sync", "watch"])
+        self.assertEqual(captured.get("sub_primary"), "de")
+        self.assertIsNone(captured.get("sub_secondary"))
+        self.assertEqual(captured.get("sub_delay"), 0.0)
+        self.assertEqual(captured.get("sub_sync"), "off")
+
+    def test_explicit_secondary_flag_is_forwarded(self):
+        captured = self._invoke(["ani-cli-sync", "watch", "--sub-secondary=en", "Show"])
+        self.assertEqual(captured.get("sub_secondary"), "en")
+        self.assertEqual(captured.get("query"), "Show")
+
+    def test_option_only_invocation_forwards_delay_to_watch(self):
+        captured = self._invoke(["ani-cli-sync", "--sub-delay", "-1.5"])
+        self.assertEqual(captured.get("sub_delay"), -1.5)
+        self.assertIsNone(captured.get("query"))
+
+    def test_console_aliases_share_the_main_entrypoint(self):
+        content = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        for alias in ("ani-cli-sync", "ani-sync"):
+            self.assertRegex(
+                content,
+                rf'(?m)^{re.escape(alias)} = "ani_cli_sync\.cli:main"$',
+                f"console-script alias '{alias}' must dispatch to ani_cli_sync.cli:main",
+            )
+
+
+class TestWatchNativeDelegation(unittest.TestCase):
+    """Baseline: watching without a stored token, or with an empty CURRENT list and
+    no query, delegates to native ani-cli and performs no AniList synchronization."""
+
+    def test_no_token_delegates_to_native_without_sync(self):
+        import ani_cli_sync.cli as cli_module
+
+        with (
+            unittest.mock.patch.object(cli_module, "get_token", return_value=None),
+            unittest.mock.patch.object(cli_module, "get_viewer") as mock_viewer,
+            unittest.mock.patch.object(cli_module, "get_watching_list") as mock_list,
+            unittest.mock.patch.object(cli_module, "update_progress") as mock_update,
+            unittest.mock.patch.object(cli_module.subprocess, "run") as mock_run,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            cli_module.cmd_watch()
+
+        mock_run.assert_called_once_with(["ani-cli", "--skip"], check=False)
+        mock_viewer.assert_not_called()
+        mock_list.assert_not_called()
+        mock_update.assert_not_called()
+
+    def test_empty_watchlist_without_query_delegates_native_without_sync(self):
+        import ani_cli_sync.cli as cli_module
+
+        with (
+            unittest.mock.patch.object(cli_module, "get_token", return_value="tok"),
+            unittest.mock.patch.object(cli_module, "get_viewer", return_value={"id": 42, "name": "test-user"}),
+            unittest.mock.patch.object(cli_module, "get_watching_list", return_value=[]),
+            unittest.mock.patch.object(cli_module, "search_anime") as mock_search,
+            unittest.mock.patch.object(cli_module, "update_progress") as mock_update,
+            unittest.mock.patch.object(cli_module.subprocess, "run") as mock_run,
+            unittest.mock.patch("builtins.input", return_value=""),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            cli_module.cmd_watch()
+
+        mock_run.assert_called_once_with(["ani-cli", "--skip"], check=False)
+        mock_search.assert_not_called()
+        mock_update.assert_not_called()
+
+
+class TestWatchSelectionCancellation(unittest.TestCase):
+    """Baseline: with fzf unavailable, selection is numbered; invalid or empty input
+    cancels rather than selecting an arbitrary episode."""
+
+    ENTRY_ALPHA: ClassVar[dict] = {
+        "id": 1,
+        "mediaId": 101,
+        "progress": 3,
+        "media": {"id": 101, "title": {"english": "Alpha Show", "romaji": "Alpha"}, "episodes": 12},
+    }
+    ENTRY_BETA: ClassVar[dict] = {
+        "id": 2,
+        "mediaId": 102,
+        "progress": 0,
+        "media": {"id": 102, "title": {"english": "Beta Show", "romaji": "Beta"}, "episodes": 12},
+    }
+
+    def _watch(self, inputs: list[str]) -> tuple[unittest.mock.MagicMock, unittest.mock.MagicMock, str]:
+        import ani_cli_sync.cli as cli_module
+
+        cli_module._PREQUEL_OFFSET_CACHE.clear()
+        out = io.StringIO()
+        input_iter = iter(inputs)
+        mock_update = unittest.mock.MagicMock()
+        mock_run = unittest.mock.MagicMock(return_value=unittest.mock.MagicMock(returncode=0))
+
+        def mock_gql(query, variables=None, token=None, retries=3):
+            return {"data": {"Media": {"relations": {"edges": []}}}}
+
+        with (
+            tempfile.TemporaryDirectory() as cache_home,
+            unittest.mock.patch.dict(os.environ, {"XDG_CACHE_HOME": cache_home}),
+            unittest.mock.patch.object(cli_module, "get_token", return_value="tok"),
+            unittest.mock.patch.object(cli_module, "get_viewer", return_value={"id": 42, "name": "test-user"}),
+            unittest.mock.patch.object(
+                cli_module,
+                "get_watching_list",
+                return_value=[self.ENTRY_ALPHA, self.ENTRY_BETA],
+            ),
+            unittest.mock.patch.object(cli_module, "gql_query", side_effect=mock_gql),
+            unittest.mock.patch.object(cli_module, "update_progress", mock_update),
+            unittest.mock.patch.object(cli_module.subprocess, "run", mock_run),
+            unittest.mock.patch.object(cli_module.subprocess, "Popen", side_effect=FileNotFoundError("fzf")),
+            unittest.mock.patch("builtins.input", side_effect=lambda *_: next(input_iter)),
+            unittest.mock.patch.object(cli_module.time, "time", side_effect=[0.0, 700.0]),
+            contextlib.redirect_stdout(out),
+        ):
+            cli_module.cmd_watch(no_sub_fallback=True)
+
+        return mock_run, mock_update, out.getvalue()
+
+    def test_valid_numbered_choice_selects_that_entry(self):
+        mock_run, mock_update, _ = self._watch(["2", "q"])
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd[0], "ani-cli")
+        self.assertEqual(cmd[-3:], ["-e", "1", "Beta"])
+        mock_update.assert_not_called()  # 700s of unknown duration is below the advance floor
+
+    def test_invalid_or_empty_numbered_input_cancels_without_launch(self):
+        for choice in ("", "abc", "0", "9"):
+            with self.subTest(choice=choice):
+                mock_run, mock_update, _ = self._watch([choice])
+                mock_run.assert_not_called()
+                mock_update.assert_not_called()
+
+    def test_cancelled_fzf_return_code_stops_without_launch(self):
+        import ani_cli_sync.cli as cli_module
+
+        mock_update = unittest.mock.MagicMock()
+        mock_run = unittest.mock.MagicMock(return_value=unittest.mock.MagicMock(returncode=0))
+        fzf_proc = unittest.mock.MagicMock()
+        fzf_proc.communicate.return_value = ("", None)
+        fzf_proc.returncode = 130  # ESC in fzf
+
+        with (
+            tempfile.TemporaryDirectory() as cache_home,
+            unittest.mock.patch.dict(os.environ, {"XDG_CACHE_HOME": cache_home}),
+            unittest.mock.patch.object(cli_module, "get_token", return_value="tok"),
+            unittest.mock.patch.object(cli_module, "get_viewer", return_value={"id": 42, "name": "test-user"}),
+            unittest.mock.patch.object(
+                cli_module,
+                "get_watching_list",
+                return_value=[self.ENTRY_ALPHA, self.ENTRY_BETA],
+            ),
+            unittest.mock.patch.object(cli_module, "update_progress", mock_update),
+            unittest.mock.patch.object(cli_module.subprocess, "run", mock_run),
+            unittest.mock.patch.object(cli_module.subprocess, "Popen", return_value=fzf_proc),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            cli_module.cmd_watch(no_sub_fallback=True)
+
+        mock_run.assert_not_called()
+        mock_update.assert_not_called()
+
+
+class TestWatchQueryNarrowing(unittest.TestCase):
+    """Baseline for watch-query selection: an exact title wins among several
+    matches, and several non-exact matches are offered as a narrowed selection
+    rather than playing one without selection."""
+
+    @staticmethod
+    def _entry(english: str, romaji: str, media_id: int) -> dict:
+        return {
+            "id": media_id,
+            "mediaId": media_id,
+            "progress": 0,
+            "media": {"id": media_id, "title": {"english": english, "romaji": romaji}, "episodes": 12},
+        }
+
+    def _watch(self, entries: list[dict], query: str, inputs: list[str]):
+        import ani_cli_sync.cli as cli_module
+
+        cli_module._PREQUEL_OFFSET_CACHE.clear()
+        out = io.StringIO()
+        input_iter = iter(inputs)
+        mock_update = unittest.mock.MagicMock()
+        mock_run = unittest.mock.MagicMock(return_value=unittest.mock.MagicMock(returncode=0))
+
+        def mock_gql(query, variables=None, token=None, retries=3):
+            return {"data": {"Media": {"relations": {"edges": []}}}}
+
+        with (
+            tempfile.TemporaryDirectory() as cache_home,
+            unittest.mock.patch.dict(os.environ, {"XDG_CACHE_HOME": cache_home}),
+            unittest.mock.patch.object(cli_module, "get_token", return_value="tok"),
+            unittest.mock.patch.object(cli_module, "get_viewer", return_value={"id": 42, "name": "test-user"}),
+            unittest.mock.patch.object(cli_module, "get_watching_list", return_value=entries),
+            unittest.mock.patch.object(cli_module, "gql_query", side_effect=mock_gql),
+            unittest.mock.patch.object(cli_module, "update_progress", mock_update),
+            unittest.mock.patch.object(cli_module.subprocess, "run", mock_run),
+            unittest.mock.patch.object(cli_module.subprocess, "Popen", side_effect=FileNotFoundError("fzf")),
+            unittest.mock.patch("builtins.input", side_effect=lambda *_: next(input_iter)),
+            unittest.mock.patch.object(cli_module.time, "time", side_effect=[0.0, 700.0]),
+            contextlib.redirect_stdout(out),
+        ):
+            cli_module.cmd_watch(query=query, no_sub_fallback=True)
+
+        return mock_run, mock_update, out.getvalue()
+
+    def test_exact_title_wins_among_several_matches(self):
+        # The non-exact substring match is listed FIRST: without the exact-title
+        # check, "Show Season 2" would be the selection.
+        entries = [self._entry("Show Season 2", "Show S2", 202), self._entry("Show", "Show", 201)]
+        mock_run, mock_update, _ = self._watch(entries, "Show", ["q"])
+
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd[-3:], ["-e", "1", "Show"])
+        mock_update.assert_not_called()
+
+    def test_several_non_exact_matches_offer_narrowed_selection(self):
+        entries = [
+            self._entry("Alpha Season 1", "Alpha S1", 201),
+            self._entry("Alpha Season 2", "Alpha S2", 202),
+            self._entry("Other Anime", "Other", 203),
+        ]
+        mock_run, _, out = self._watch(entries, "Season", ["2", "q"])
+
+        self.assertNotIn("Other Anime", out, "the offered menu must contain only the narrowed matches")
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd[-3:], ["-e", "1", "Alpha S2"])
+
+
+class TestPrefetchHermeticity(unittest.TestCase):
+    """Hermeticity guard for the watch loop's lookahead prefetch thread.
+
+    Exactly two fixtures in this suite drive cmd_watch into the
+    subtitle-fallback branch far enough to start the lookahead daemon thread
+    (target prefetch_next_episode, which the watch loop imports
+    function-locally from ani_cli_sync.subtitles, so that module attribute is
+    the only patch boundary that intercepts it). Both must stub the target
+    there: without the stub, real stream resolution, translation, or ani-cli
+    processes can run after their mock contexts expire and race into later
+    tests' subprocess.run mocks.
+
+    - test_subtitle_fallback_fixture_starts_no_real_prefetch_thread re-runs the
+      fully mocked fixture under a recording threading.Thread wrapper (a thread
+      whose target is the real function is captured, never started, and fails
+      the guard), so an escape is observed without being performed.
+    - test_global_search_fallback_fixture_stubs_prefetch_at_source pins the
+      stub inside the fallback fixture statically, because that fixture
+      exercises a real foreground resolve by design and must not be executed
+      from here.
+    """
+
+    def test_subtitle_fallback_fixture_starts_no_real_prefetch_thread(self):
+        import threading
+
+        import ani_cli_sync.subtitles as subtitles_module
+
+        real_prefetch = subtitles_module.prefetch_next_episode
+        real_thread = threading.Thread
+        captured_targets: list = []
+
+        def thread_factory(*args, target=None, **kwargs):
+            captured_targets.append(target)
+            if target is real_prefetch:
+                target = lambda *a, **k: None  # observe, never perform
+            return real_thread(*args, target=target, **kwargs)
+
+        result = unittest.TestResult()
+        with unittest.mock.patch("threading.Thread", thread_factory):
+            TestSequelHelpers("test_cmd_watch_subtitles_fallback_mpv").run(result)
+
+        self.assertTrue(
+            result.wasSuccessful(),
+            msg=f"re-run fixture must still pass: {result.failures}{result.errors}",
+        )
+        # The fixture must still exercise the lookahead path (exactly one
+        # thread) AND its target must be the stub, never the real function.
+        self.assertEqual(len(captured_targets), 1, msg="fixture no longer exercises the lookahead thread")
+        self.assertIsNot(
+            captured_targets[0],
+            real_prefetch,
+            msg="fixture started a real prefetch_next_episode thread; stub it at the "
+            'ani_cli_sync.subtitles boundary, not elsewhere (the watch loop imports '
+            "it function-locally from that module)",
+        )
+
+    def test_global_search_fallback_fixture_stubs_prefetch_at_source(self):
+        import inspect
+
+        source = inspect.getsource(
+            TestWatchQueryFallback.test_autoplay_query_not_in_watching_falls_back_to_global_search
+        )
+        self.assertIn(
+            'unittest.mock.patch("ani_cli_sync.subtitles.prefetch_next_episode"',
+            source,
+            msg="the global-search fallback fixture must stub prefetch at the "
+            "ani_cli_sync.subtitles boundary; without it its lookahead daemon "
+            "thread runs real resolve/prepare work after the mock context expires",
+        )
+
+
+class TestSequelFormatEligibility(unittest.TestCase):
+    """Rollover considers TV and ONA sequels; other formats (e.g. a MOVIE) are not eligible."""
+
+    @staticmethod
+    def _relations_resp(fmt: str) -> dict:
+        return {
+            "data": {
+                "Media": {
+                    "relations": {
+                        "edges": [
+                            {
+                                "relationType": "SEQUEL",
+                                "node": {
+                                    "id": 200,
+                                    "title": {"english": "Side Film", "romaji": "Side Film"},
+                                    "episodes": 2,
+                                    "format": fmt,
+                                    "status": "FINISHED",
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+
+    def test_movie_sequel_is_not_eligible(self):
+        with unittest.mock.patch("ani_cli_sync.cli.gql_query", return_value=self._relations_resp("MOVIE")):
+            node, reason = find_sequel(100)
+        self.assertIsNone(node)
+        self.assertIsNone(reason)
+
+    def test_ona_sequel_is_eligible(self):
+        with unittest.mock.patch("ani_cli_sync.cli.gql_query", return_value=self._relations_resp("ONA")):
+            node, reason = find_sequel(100)
+        self.assertIsNotNone(node)
+        self.assertEqual(node["id"], 200)
+        self.assertIsNone(reason)
 
 
 if __name__ == "__main__":
