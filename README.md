@@ -264,6 +264,27 @@ replace the HTTP translation service, and they are skipped by `--dub` and
 
 ---
 
+## ⏱️ Completion Detection
+
+`ani-cli-sync` only advances the autoplay chain on **positive evidence that the episode played through**. Closing the player window always stops the chain - it never skips an episode.
+
+The completion threshold is derived from the first usable duration source:
+
+| Tier | Source | Notes |
+|---|---|---|
+| 1 | **HLS playlist duration** | Probed from the stream that was actually played (`#EXTINF` sum). Release-specific, so it outranks everything else. |
+| 2 | **AniList episode length** | The general per-episode duration in minutes from AniList, converted to seconds. Used when no stream information is available (`--dub`, `--no-sub-fallback`). |
+| 3 | **1150-second constant** | The conservative last resort, minus known skip durations. |
+
+- **A non-zero player exit always stops the chain**, regardless of how much was watched and regardless of which duration tier applies.
+- When intro/outro skips are known (`ani-skip`), the threshold is **70%** of the effective duration; without skip metadata it is **80%**, which tolerates manual skipping.
+- Only a **positive integer** AniList duration is accepted. Missing, null, boolean, non-integer, zero, negative and non-finite values fall back to the constant instead of allowing an instant "completion".
+- The duration follows the **selected** media (watchlist match, global search, `fzf` picker or manual picker), and a **sequel rollover replaces it** rather than inheriting the previous season's value.
+
+No additional per-episode request is made: the `duration` field is added to the existing watchlist, global-search and sequel-relation queries.
+
+---
+
 ## 🔄 Sequel Rollover
 
 When you finish the final episode of a season, `ani-cli-sync` automatically queries AniList for the next released TV or ONA sequel:
