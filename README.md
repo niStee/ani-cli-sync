@@ -23,10 +23,10 @@
 - 🔁 **Continuous Autoplay**: Stream multiple episodes continuously with `--autoplay` / `-a`.
 - ⏭️ **Intro Skipping**: Built-in `ani-skip` integration (can be disabled via `--no-skip`).
 - 🔞 **Uncensored / AT-X / Blu-ray Preference**: Automatically prioritizes uncensored, AT-X, or Blu-ray cuts over censored TV broadcast releases with zero-prompt menu interception (configurable via `--uncensored` / `--no-uncensored` or `ANI_CLI_SYNC_UNCENSORED`).
-- 💬 **Automated Dual-Subtitles & Fallback**: Automatically detects missing or forced-only tracks (e.g. 8-cue signs-only German tracks) and synthesizes synchronized German dialogue (bottom) and Traditional Chinese with Hanyu Pinyin (top) via local LiteLLM proxy with zero-latency disk caching.
+- 💬 **Automated Dual-Subtitles & Fallback**: Automatically detects missing or forced-only tracks (e.g. 8-cue signs-only German tracks) and synthesizes synchronized German dialogue (bottom) via an OpenAI-compatible local LiteLLM service. A second track (e.g. Traditional Chinese with Hanyu Pinyin, top) is generated and attached only when you request it explicitly. Generated tracks are cached on disk, so a later viewing avoids another translation request for that track.
 - 🎯 **Smart Disambiguation**: Resolves multi-season naming quirks (e.g. AniDB absolute episode offsets) and matches active watchlist entries over global searches.
 - 📥 **Netflix Import**: Easily import watch history from a `NetflixViewingHistory.csv` export.
-- 📦 **Zero External Python Dependencies**: Built entirely using the Python standard library.
+- 📦 **Zero Python Dependencies**: The core installation is built entirely using the Python standard library. The optional `subsync` extra adds VAD packages for subtitle timing measurement only. Subtitle translation talks to a separate, optional HTTP service (see the "Optional subtitle translation service" section under Prerequisites).
 
 ---
 
@@ -37,6 +37,30 @@
 - **[`mpv`](https://mpv.io)**: Video player (used by `ani-cli`).
 - **[`fzf`](https://github.com/junegunn/fzf)**: *(Optional, recommended)* For interactive fuzzy menus.
 - **[`ani-skip`](https://github.com/synacktraa/ani-skip)**: *(Optional)* For automatic opening/ending intro skipping.
+
+### Optional subtitle translation service
+
+`ani-cli-sync` itself needs **no Python package from LiteLLM and no other third-party Python
+package**: the core install has zero runtime dependencies and the HTTP calls use the Python
+standard library (`urllib.request`).
+
+What *is* needed is an **external, OpenAI-compatible HTTP service** (normally a LiteLLM
+gateway) when a requested subtitle track actually has to be synthesized:
+
+- The service is normally reachable at `http://localhost:4000/v1`. Set `LITELLM_API_BASE`
+  before startup to point at a different base URL.
+- The client sends a fixed `Authorization: Bearer dummy` header, which suits a local proxy
+  that accepts it. `LITELLM_API_KEY` is **not read** by this client and does not configure
+  authentication; there is no API-key support.
+- The default model cascade is `minimax-m3.1-flash`, then `gemini-3.1-flash-lite`. The
+  override precedence is: `ANI_CLI_SYNC_LLM_MODELS` (comma-separated list) first, then
+  `ANI_CLI_SYNC_LLM_MODEL` (single model), and only if neither is set the default cascade.
+- You provision and run that service yourself. This project neither installs nor starts it,
+  and it is only needed when a track must actually be translated. A cached or already usable
+  native track avoids the request for that track, but a separate uncached, non-English
+  secondary track is still translated.
+- `--sub-sync=auto` and its optional `subsync` extra are a separate concern: they measure
+  subtitle timing with a neural VAD and do not provide, replace, or require this service.
 
 ---
 
@@ -128,6 +152,8 @@ Export your viewing history from Netflix (`NetflixViewingHistory.csv`) and impor
 ani-cli-sync import-netflix ~/Downloads/NetflixViewingHistory.csv
 ```
 
+For export steps, privacy, mapping evidence, exit codes, and reruns, see the [Netflix viewing-history import guide](docs/netflix-viewing-history-import.md).
+
 ---
 
 ## ⚙️ CLI Reference
@@ -158,7 +184,7 @@ options:
   --sub-primary SUB_PRIMARY
                         Primary subtitle language (default: de, env: ANI_CLI_SYNC_SUB_PRIMARY)
   --sub-secondary SUB_SECONDARY
-                        Secondary subtitle language on demand (e.g. zh-pinyin; default: stream English or none, env: ANI_CLI_SYNC_SUB_SECONDARY)
+                        Secondary subtitle language on demand (e.g. en, zh-pinyin; default: disabled, env: ANI_CLI_SYNC_SUB_SECONDARY)
   --no-sub-fallback     Disable automated subtitle synthesis/fallback and use native ani-cli tracks
   --uncensored, --no-uncensored
                         Prefer uncensored/AT-X/Blu-ray releases when available (default: true, disable with --no-uncensored, env: ANI_CLI_SYNC_UNCENSORED)
@@ -188,13 +214,74 @@ When watching anime, provider subtitle tracks are frequently incomplete (e.g. Ge
 1. **Track Density Validation (Forced vs. Dialogue)**: Inspects candidate stream subtitles. Any track with `< 50` cues is flagged as a forced signs-only track and bypassed for dialogue.
 2. **Deterministic Stream Sync**: Uses the stream's full English WebVTT track directly from the HLS manifest as the structural foundation, guaranteeing **0ms timing drift** and matching intro/outro cuts without slow audio-correlation alignment.
 3. **Optimized Concurrent Translation**:
-   - **Primary Subtitle (`--sid=1`, bottom)**: Natural, localized German dialogue translated via the local LiteLLM proxy (`deepseek-v4-flash`).
+   - **Primary Subtitle (`--sid=1`, bottom)**: Natural, localized German dialogue translated via the optional local LiteLLM HTTP service. The default model cascade is `minimax-m3.1-flash`, then `gemini-3.1-flash-lite`. The override precedence is: `ANI_CLI_SYNC_LLM_MODELS` (comma-separated list) first, then `ANI_CLI_SYNC_LLM_MODEL` (single model), and only if neither is set the default cascade.
    - **Secondary Subtitle (`--secondary-sid=2`, top)**: **Disabled by default.** It is attached and activated only when a secondary language is requested.
-     - **On-demand English** (`--sub-secondary en` / `ANI_CLI_SYNC_SUB_SECONDARY=en`): Uses the stream's English track directly, with **0s translation latency**.
+     - **On-demand English** (`--sub-secondary en` / `ANI_CLI_SYNC_SUB_SECONDARY=en`): Uses the stream's English track directly, so no translation request is made for it.
      - **On-demand CJK learning track** (`--sub-secondary zh-pinyin`): Generates two-line cues with context-accurate Hanyu Pinyin with tone marks (resolving *duōyīnzì* polyphones like 銀行 *háng* vs. 行走 *xíng*) on top and Traditional Chinese (繁體中文) on bottom.
-4. **Lookahead Background Prefetching**: When Episode $N$ begins playback, a background daemon thread quietly pre-fetches and prepares subtitles for Episode $N+1$. When you finish the episode, the next episode launches with **0s wait time**.
-5. **Local Disk Caching**: Generated files are stored at `~/.cache/ani-cli/subtitles/{anime_slug}_ep{ep}_{lang}.vtt`. Subsequent viewings yield a **0.0003s instant cache hit**.
+4. **Lookahead Background Prefetching**: When Episode $N$ begins playback, a background daemon thread quietly pre-fetches and prepares subtitles for Episode $N+1$. A successful prefetch can hide the translation work of the next episode behind the current playback; a cold translation or a failed prefetch can still delay the start of the next episode.
+5. **Local Disk Caching**: Generated files are stored at `~/.cache/ani-cli/subtitles/{anime_slug}_ep{ep}_{lang}.vtt`. A subsequent viewing reuses the cached file for that track and therefore avoids another translation request for it.
 6. **Clean Player Integration**: Passes the resolved tracks to `mpv`, allowing seamless on-the-fly track switching (`k` / `Alt+j`).
+
+### When no translation is needed
+
+Avoidance is decided **per requested track**, not for the whole plan:
+
+- The **primary** track needs no model call when a cached generated track exists, or when
+  the stream already carries a full German dialogue track.
+- The **secondary** track needs no model call when a cached generated track exists, or when
+  the requested language is `en` (the stream's English track is attached directly).
+
+So a cached or usable native **primary** track does not stop a separate translation
+request for an uncached, non-English **secondary** track: the two are decided
+independently. A cached or usable native track also avoids a model call, but it is not a
+claim that playback startup as a whole is instantaneous: stream lookup, subtitle fetching,
+and playback start still take their own time.
+
+### Failure and bypass
+
+- A batch or model failure is reported as a warning and the cascade moves on; when every
+  candidate is exhausted, translation gives up for that track.
+- The **primary** track is chosen by preference order: the cached or translated German track
+  first, then the stream's German track, and only then the stream's English track. A failed
+  German translation therefore does **not** guarantee an English primary track: if the
+  stream has a German track, that track is used even when it is a signs-only track and the
+  translation failed. Playback is therefore not guaranteed to be translated, and it is not
+  guaranteed to carry full German dialogue either.
+- The **secondary** track is attached when it was requested and could be produced. If the
+  requested secondary could not be produced, the stream's English track is attached as the
+  secondary instead, as long as it is a **distinct** track from the primary. Only when no
+  distinct second track exists is the secondary disabled, so the player never points at a
+  track index that does not exist.
+- `--no-sub-fallback` bypasses the whole synthesis and fallback path and uses the native
+  `ani-cli` subtitle tracks instead.
+
+### Timing measurement is a separate feature
+
+`--sub-sync=auto` and the optional `subsync` extra measure subtitle timing with a neural
+VAD. They are not needed for ordinary LLM subtitle translation, they do not supply or
+replace the HTTP translation service, and they are skipped by `--dub` and
+`--no-sub-fallback`.
+
+---
+
+## ⏱️ Completion Detection
+
+`ani-cli-sync` only advances the autoplay chain on **positive evidence that the episode played through**. Closing the player window always stops the chain - it never skips an episode.
+
+The completion threshold is derived from the first usable duration source:
+
+| Tier | Source | Notes |
+|---|---|---|
+| 1 | **HLS playlist duration** | Probed from the stream that was actually played (`#EXTINF` sum). Release-specific, so it outranks everything else. |
+| 2 | **AniList episode length** | The general per-episode duration in minutes from AniList, converted to seconds. Used when no stream information is available (`--dub`, `--no-sub-fallback`). |
+| 3 | **1150-second constant** | The conservative last resort, minus known skip durations. |
+
+- **A non-zero player exit always stops the chain**, regardless of how much was watched and regardless of which duration tier applies.
+- When intro/outro skips are known (`ani-skip`), the threshold is **70%** of the effective duration; without skip metadata it is **80%**, which tolerates manual skipping.
+- Only a **positive integer** AniList duration is accepted. Missing, null, boolean, non-integer, zero, negative and non-finite values fall back to the constant instead of allowing an instant "completion".
+- The duration follows the **selected** media (watchlist match, global search, `fzf` picker or manual picker), and a **sequel rollover replaces it** rather than inheriting the previous season's value.
+
+No additional per-episode request is made: the `duration` field is added to the existing watchlist, global-search and sequel-relation queries.
 
 ---
 

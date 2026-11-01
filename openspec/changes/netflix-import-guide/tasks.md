@@ -1,0 +1,30 @@
+# Tasks
+
+This docs-only package follows the pilot override in `design.md`: GPT orchestrator review replaces intermediate human approval and final human acceptance remains required. #90 supplies minimum behavior documentation; this package adds only the expanded guide after its dependency is resolved.
+
+## Dependency status
+
+#90 is **not merged**. Its behavioral change (`openspec/changes/netflix-history-import/` in the #90 worktree) was read read-only on 2026-10-30 and its accepted contract is recorded in `design.md` and the local decision review: progress policy **P1** (exact contiguous `1..N`, sparse blocks the whole group) and status policy **S1** (only absent entries created as `CURRENT` and existing `CURRENT` entries may change; every other status stays unchanged).
+
+Both selected branches are implemented in the guide. P2 and S2 were removed, not paraphrased.
+
+## 1. Resolve dependency and review the documentation plan
+
+- [x] 1.1 (tier: frontier) GPT compares #90's accepted spec, tests, CLI help, and README against the #88 dependency table; verify exactly one P1/P2 policy and one S1/S2 policy are selected and stop if any semantics, exit meaning, or example remains unresolved. Result: #90's `decision-review.md` records P1 and S1 as selected, with P2 and S2 retained only as rejected alternatives. The guide contains only the P1 and S1 behavior; no conditional branch remains. Evidence: `implementation-review.md`, section "Dependency on #90, and the merge order" and the contract coverage map. Note: #90's tests are still being authored in the other worktree and were not available here, and the CLI help does not yet exist, so the *help-text* leg of this check is still pending the merge.
+- [x] 1.2 (tier: frontier) GPT reviews the planned export/privacy/mapping/idempotence guide against the two official Netflix sources and accepted #90 behavior; verify it adds no runtime requirement, real viewing data, or claim that preview is offline. Result: both Netflix help pages were read on 2026-10-30 (nodes 101917 and 100624). The guide states that preview is not offline mode, names no new runtime requirement, and uses only synthetic titles (`Chrono Academy` and its invented seasons and parts). The `Title,Date` contract is labeled as the project's own support boundary, not as a Netflix guarantee. Evidence: `implementation-review.md`.
+
+## 2. Bounded documentation edit
+
+- [x] 2.1 (tier: low) After GPT plan approval, create `docs/netflix-viewing-history-import.md` and add only the planned relative README link; verify all conditional branches except the accepted #90 policy are removed and #90's minimum docs remain unchanged. Result: the guide was created with 8 sections (availability, what it imports, export, privacy, preview/apply, matching, evidence, status policy, results and exits, repeats and idempotence, limitations, related). README gained exactly one added line with the relative link `docs/netflix-viewing-history-import.md`. No existing README sentence was reworded, so #90's minimum section is untouched by this round. Evidence: `git diff -- README.md` and the contract coverage map in `implementation-review.md`.
+- [x] 2.2 (tier: low) Run `git diff --check`, check every external and relative link and document heading, compare all commands/exits/status wording with actual #90 help/spec, and inspect the final diff for synthetic-only examples and the two-file scope; do not run live commands or a full test suite. Result: `git diff --check` exit 0; every relative link and in-page anchor resolves; the guide is pure ASCII (0 non-ASCII bytes in 21797 bytes) and the added README line is pure ASCII; the diff contains only the guide, the README link, and the change artifacts. The comparison against actual #90 help **could not be completed**, because #90 is not merged and this tree's `import-netflix` parser accepts only the positional `csv_path` with no `--apply`. The guide therefore states in its own "Availability" section that the behavior ships with #90 and tells the reader to check `--help`; the one output-shaped block is marked illustrative and uses a placeholder rather than a claimed verbatim string. No full test suite claim is made for the feature. Evidence: `implementation-review.md`, sections "Reviewer note: what is verified and what is not" and "Verification results".
+
+## 3. Review and acceptance
+
+- [ ] 3.1 (tier: frontier) GPT performs the final rendered-documentation and traceability review against issue #88 and accepted #90 behavior; verify export/archive distinction, privacy, preview/apply, mapping evidence/inference, exits, partial results, and idempotence are all accurate before final human acceptance. Partially performed: GPT raised two precision defects on 2026-10-30 - the privacy section's blanket "neither does the importer [upload]" denial contradicted the AniList title and current-state queries, and the credential wording implied the token never left the machine; the `--apply` section claimed it "sends the mutations you saw in the preview - and nothing else", which is false because a preview is not stored or bound to a later invocation and each run recomputes its own plan. Both were corrected in place; the details are in `implementation-review.md`, section "Precision corrections applied after GPT review". Still open: the parity leg against the merged #90 CLI help and report format, and final human acceptance.
+
+## Workflow follow-up
+
+- Do not archive or apply this planning change during planning.
+- If #90 semantics change later, update this guide through the same documentation review rather than letting it diverge.
+- Merge order: #90 first, then this guide. Before publishing the guide, reconcile the illustrative output block and the flag spelling against the shipped `--help`, and record that reconciliation in `implementation-review.md`.
+- A documentation-parity guard test (guide claims versus shipped help) is a natural follow-up but is left to #90's test module, where the merged CLI exists; a test against an absent flag here would be vacuous.

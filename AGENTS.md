@@ -22,7 +22,7 @@ Automated AniList synchronization wrapper for [`ani-cli`](https://github.com/pys
    - **Tier 3 (Identity)**: Fallback 1-to-1 numbering.
 3. **Completion, Boundary Enforcement & Sequel Rollover**: Auto-transitions status to `COMPLETED` when `ep >= total`. Queries AniList for released TV/ONA sequels with a clobber guard (resumes at `progress + 1` if already in list, prompts in interactive mode or seamlessly continues in `--autoplay`).
 4. **Zero Third-Party Runtime Dependencies**: Implemented strictly with standard library (`urllib.request`, `json`, `argparse`, `subprocess`, `pathlib`, `concurrent.futures`).
-5. **Automated Subtitle Fallback & On-Demand Dual-Track Pipeline**: Inspects stream tracks (detecting forced tracks `< 50` cues vs. full dialogue). When target tracks are missing or signs-only, translates the base English track concurrently via local LiteLLM proxy (`minimax-m3.1-flash`, measured; override with `ANI_CLI_SYNC_LLM_MODEL`), producing synchronized German dialogue (`--sid=1`, bottom) with persistent caching in `~/.cache/ani-cli/subtitles/`. The secondary track is **disabled by default**: it is attached and activated (`--secondary-sid=2`, top) only when a secondary language is requested via `--sub-secondary` or `ANI_CLI_SYNC_SUB_SECONDARY`. Requesting `en` attaches the stream's English track directly without a translation round trip.
+5. **Automated Subtitle Fallback & On-Demand Dual-Track Pipeline**: Inspects stream tracks (detecting forced tracks `< 50` cues vs. full dialogue). When target tracks are missing or signs-only, translates the base English track concurrently via the optional local LiteLLM HTTP service (`minimax-m3.1-flash`, measured; override with `ANI_CLI_SYNC_LLM_MODEL`), producing synchronized German dialogue (`--sid=1`, bottom) with persistent caching in `~/.cache/ani-cli/subtitles/`. The translation service is an **optional external HTTP dependency**, not a Python package: the core install keeps zero Python runtime dependencies and the HTTP calls use the standard library (`urllib.request`). The service is contacted per track that has to be synthesized: a cached or already usable native track avoids the request for that track, while an uncached, non-English secondary track is still translated. The secondary track is **disabled by default**: it is attached and activated (`--secondary-sid=2`, top) only when a secondary language is requested via `--sub-secondary` or `ANI_CLI_SYNC_SUB_SECONDARY`. Requesting `en` attaches the stream's English track directly without a translation round trip.
 
 ## Episode Offset Resolution & Precedence
 
@@ -69,6 +69,23 @@ A tiered model failover cascade (`DEFAULT_FALLBACK_MODELS = ("minimax-m3.1-flash
 - **HTTP 502/503 Transient Errors**: Bounded retry with exponential backoff before escalating to the next candidate.
 - **Override Precedence**: `ANI_CLI_SYNC_LLM_MODELS` (comma-separated list) > `ANI_CLI_SYNC_LLM_MODEL` (single override) > `DEFAULT_FALLBACK_MODELS`.
 
+### Runtime requirements
+
+The cascade runs against an **external, OpenAI-compatible HTTP service**, normally a LiteLLM
+gateway at `http://localhost:4000/v1`. `LITELLM_API_BASE` overrides that base URL; it is read
+once at module import, so it must be set before the process starts. The client sends a fixed
+`Authorization: Bearer dummy` header, which suits a local proxy that accepts it.
+
+`LITELLM_API_KEY` is **not read** by this client and does not configure authentication. There
+is no API-key support: do not add credential lookup, keyring integration, or a claim that a
+remote authenticated endpoint can be configured through it.
+
+No Python package from LiteLLM is required. The core package keeps zero Python runtime
+dependencies and the HTTP calls use the standard library (`urllib.request`); the gateway is
+an external program that the operator provisions and runs separately. The gateway is
+contacted per track that actually has to be synthesized, so a request can still happen for
+a secondary track even when the primary track was served from cache.
+
 ### Model Governance Contract (the rule that catches dead handles)
 
 A model handle is only usable if it is **registered in ai-infra's
@@ -104,8 +121,12 @@ commit `1f26d7a`). They answered HTTP 400 for months, unnoticed, because
 the cascade is only exercised on a quota exhaustion. A guard test now pins
 every default member against the vendored registry.
 
-Measured 2026-10-24, one real 50-cue batch per model through the shipped code path
-(against the local proxy):
+Measured 2026-10-24, one real 50-cue batch per candidate model through the shipped code path
+(against the local proxy). Only the two cascade defaults are used unless an override selects
+something else; the table below lists the candidates that were measured on that date. Some
+were superseded by a newer generation (`minimax-m3`, `minimax-m2.7`,
+`minimax-m2.7-highspeed`), some were unsuitable for this workload (`qwen-3.8-flash`,
+`deepseek-v4-flash`), and some did not answer it (`gemini-3.6-flash`, `gemini-3.8-flash`):
 
 | model | wall | note |
 |---|---|---|
@@ -120,9 +141,11 @@ Measured 2026-10-24, one real 50-cue batch per model through the shipped code pa
 | `deepseek-v4-flash` | 139.4s | reasoning model; stalls the episode |
 | `gemini-3.6-flash` | - | HTTP 400 on this workload |
 
-A cold `prepare_subtitles` for a 319-cue episode is **~34s**. Two failure modes are bounded on
-purpose: `timeout=45s` per batch, `retries=1` (LiteLLM already retries internally), and
-`translate_cues_llm` aborts without waiting for in-flight siblings. The earlier
+A cold `prepare_subtitles` for a 319-cue episode measured **~34s** on 2026-10-24. That is a
+dated measurement of one workload, not a latency guarantee: cold translation, model
+failover, and the 45s per-batch socket timeout can each delay playback. Two failure modes are
+bounded on purpose: `timeout=45s` per batch, `retries=1` (LiteLLM already retries internally),
+and `translate_cues_llm` aborts without waiting for in-flight siblings. The earlier
 `with ThreadPoolExecutor` return path shut the executor down with `wait=True`, so a known
 failure still cost the slowest sibling's full budget -- that was a 180s stall.
 
@@ -131,6 +154,47 @@ failover onto them serialises 5 batch workers and is a latency trap for this wor
 direct Token Plan deployments are the ones that matter. `llm-tower` is **not** a
 translation endpoint: its inference ports do not answer, and the fleet manifest
 deploys only `actions-runner` to that node, so no fleet health check maintains it.
+
+### When Translation Is Skipped
+
+The decision is made **per requested track**, not for the whole plan:
+
+- **Primary**: no model call when a cached generated track exists, or when the stream
+  carries a full German dialogue track (`is_forced_track` is false for it).
+- **Secondary**: no model call when a cached generated track exists, or when the requested
+  language is `en` (the stream's English track is attached directly).
+
+The two are decided independently, so a cached or usable native **primary** track does not
+stop a separate translation request for an uncached, non-English **secondary** track. A
+cached or usable native track avoids a model call; it is not a claim that playback startup
+as a whole is instantaneous.
+
+### Failure, Fallback, and Bypass
+
+- Batch and model failures are logged as warnings; the cascade advances to the next
+  candidate, and when every candidate is exhausted `translate_cues_llm` returns `None`.
+- **Primary preference order** (`subtitles.py:1011-1016`): the cached or translated German
+  track first, then the stream's German track, then the stream's English track. A failed
+  German translation therefore does **not** guarantee an English primary: when the stream
+  has a German track, that track is used even if it is a signs-only track and the
+  translation failed. Playback is not guaranteed to be translated, and it is not guaranteed
+  to carry full German dialogue either.
+- **Secondary** (`subtitles.py:1021-1030`): when a secondary language was requested and the
+  requested track could not be produced, the stream's English track is attached as the
+  secondary instead, provided it is a **distinct** track from the primary. The secondary is
+  disabled only when no distinct second track exists, so the player never points at a track
+  index that does not exist.
+- `--no-sub-fallback` bypasses the whole synthesis and fallback path: the native `ani-cli`
+  command runs without `resolve_stream_info` and without this translation plan. `--dub`
+  bypasses the subtitle fallback path as well.
+
+### The `subsync` Extra Is Separate
+
+`--sub-sync=auto` and the optional `subsync` extra measure subtitle timing with a neural
+VAD. They are not needed for ordinary LLM subtitle translation, they do not supply or
+replace the HTTP translation service, and they are skipped by `--dub` and
+`--no-sub-fallback`. The VAD packages are the only third-party Python dependencies in the
+project, and they are opt-in.
 
 
 ## Commands & Testing
@@ -177,7 +241,6 @@ The duration is summed from the HLS media playlist (`#EXTINF`). When automated i
 skips occur (`ani-skip`), `skip_seconds` is subtracted so an episode with skipped OP (~90s)
 and ED (~90s) is not falsely classified as an early quit. Without skip metadata, an 80%
 baseline (matching PlexTraktSync and Trakt standards) allows manual skips without stalling.
-When probing fails or in the `no_sub_fallback` path, the 1150s fallback (~19.2 minutes) applies.
 
 **The two ratios answer different questions.** The 70% skip-aware floor applies when the
 tracker knows non-narrative content was skipped, so the floor is relaxed: affected releases
@@ -185,10 +248,41 @@ carry recaps and credits beyond the marked OP/ED, which the skip metadata does n
 The 80% no-skip floor applies when the user may have skipped manually, so it stays strict.
 Relaxing the wrong one would let a closed player window look like a completed episode.
 
+### Duration evidence: three tiers
+
+The completion threshold is derived from the first usable duration source, in this order:
+
+1. **HLS playlist total** - the probed release-specific duration (`#EXTINF` sum). It describes
+   the cut that was actually played, so it always wins over metadata.
+2. **AniList `Media.duration`** - the general episode length in minutes, converted once to
+   seconds (`minutes * 60`). This is the fallback for the paths that never resolve stream
+   information (`--dub`, `--no-sub-fallback`). It is *general* metadata, not release-specific
+   evidence, which is exactly why it only ranks behind the probe.
+3. **The 1150-second constant** (~19.2 minutes), minus known skips. This tier is unchanged and
+   is not scaled by a ratio; it is the conservative last resort.
+
+When tier 2 or tier 1 supplies the duration, the existing 70%/80% ratio applies to it. A
+non-zero exit stops before any tier is consulted.
+
+**Only a positive integer is usable AniList metadata.** Null, missing, boolean, non-integer
+(float, numeric string), zero, negative, NaN and infinity are all rejected, so a malformed
+value falls through to the 1150-second constant instead of producing a zero or negative
+completion threshold. `bool` needs its own rejection because Python's `bool` is an `int`
+subclass and `True` would otherwise coerce to 60 seconds.
+
+**The duration follows the selected media, and no extra request is made.** The value travels
+with the media id, so it survives every selection route (watchlist match, global search, fzf,
+manual picker) without a title lookup. On sequel rollover it is **replaced** by the sequel's
+own duration from the existing sequel relation query; a missing or invalid sequel duration
+becomes unknown rather than inheriting the previous season's value. The three existing
+AniList queries (watchlist, global search, sequel relations) request `duration` in their
+current selection sets - there is no per-episode metadata request.
+
 **Why the previous logic was wrong.** It advanced on any non-zero exit (so closing mpv
 skipped the episode) and treated any zero exit past a flat `600s` threshold as "finished",
 which advanced even when the user had closed the window early. Both are corrected by
-`_should_advance()` in `cli.py`, covered by `tests/test_autoplay_stop.py`.
+`_should_advance()` in `cli.py`, covered by `tests/test_autoplay_stop.py` and
+`tests/test_autoplay_duration_fallback.py`.
 
 ## Subtitle Sync Offset (`--sub-delay`)
 

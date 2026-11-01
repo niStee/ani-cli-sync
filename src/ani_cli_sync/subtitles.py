@@ -4,8 +4,12 @@ and dual-language subtitle generation (German + Traditional Chinese with Pinyin)
 Features:
   - Stream metadata and subtitle inspection via ani-cli debug mode.
   - Distinction of forced tracks (signs/songs only) vs. full dialogue tracks.
-  - Context-aware G2P translation via local LiteLLM proxy (deepseek-v4-flash).
+  - Context-aware G2P translation via an optional OpenAI-compatible local LiteLLM
+    HTTP service (no LiteLLM Python package is used): minimax-m3.1-flash then
+    gemini-3.1-flash-lite by default.
   - Dual-line CJK cue formatting (Line 1: Hanyu Pinyin with tones, Line 2: Traditional Hanzi).
+  - The secondary track is opt-in: it is generated and attached only when a
+    secondary language is requested.
   - Local caching in XDG_CACHE_HOME (~/.cache/ani-cli/subtitles/).
   - MPV command builder supporting primary (--sid=1, bottom) and secondary (--secondary-sid=2, top).
 """
@@ -757,7 +761,9 @@ def translate_cues_llm(
     characters: list[CharacterProfile] | None = None,
 ) -> list[VTTCue] | None:
     """
-    Translate cues via local LiteLLM proxy concurrently across worker threads with tiered failover.
+    Translate cues via an OpenAI-compatible HTTP service (normally a local LiteLLM
+    gateway) concurrently across worker threads with tiered failover. No LiteLLM
+    Python package is required: the request uses the standard library.
     For 'de': Produces natural German anime dialogue.
     For 'zh-pinyin': Produces 2 lines per cue:
       Line 1: Context-accurate Hanyu Pinyin with tone marks
@@ -886,6 +892,16 @@ def prepare_subtitles(
     5. If secondary_lang is None, the secondary track is disabled (secondary_sid = 0)
        and the stream's English track is not attached.
     6. Caches all generated files and returns an MPV SubtitlePlan.
+
+    Steps 1 and 2 need no model call for that track: a cached track or a usable native
+    track avoids the translation request for it. The primary and the secondary are
+    decided independently, so a cached primary does not stop a translation request for
+    an uncached, non-English secondary. The primary is then chosen by preference order
+    (cached or translated German track, then the stream's German track, then the
+    stream's English track), so a failed German translation does not guarantee an
+    English primary: a stream German track is used even when it is signs-only. A
+    requested secondary that could not be produced falls back to the stream's English
+    track when that is a distinct track from the primary, and is disabled otherwise.
     """
     if cache_dir is None:
         cache_base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
