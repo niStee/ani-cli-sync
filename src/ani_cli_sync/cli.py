@@ -14,9 +14,12 @@ Features:
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -372,80 +375,401 @@ def cmd_set(title: str, episode: int) -> None:
     print(f"✓ Updated AniList: {display_title} -> Episode {episode}/{total_str} [{status}]")
 
 
-def cmd_import_netflix(csv_path: str) -> None:
-    """Import viewing history from a Netflix CSV file into AniList."""
-    import csv
+_NETFLIX_HEADER = ("Title", "Date")
+_NETFLIX_EPISODE = re.compile(r"^(?P<release>.+): Episode (?P<episode>[1-9][0-9]*)$")
+_NETFLIX_SEARCH_LIMIT = 10
+_ANILIST_ENTRY_STATUSES = frozenset(
+    {"CURRENT", "PLANNING", "PAUSED", "DROPPED", "REPEATING", "COMPLETED"}
+)
 
+_NETFLIX_SEARCH_QUERY = """
+query ($search: String, $perPage: Int) {
+  Page(page: 1, perPage: $perPage) {
+    media(search: $search, type: ANIME) {
+      id
+      title { english romaji native }
+      synonyms
+      episodes
+      format
+    }
+  }
+}
+"""
+
+_NETFLIX_STATE_QUERY = """
+query ($mid: Int) {
+  MediaList(mediaId: $mid) {
+    status
+    progress
+  }
+}
+"""
+
+_NETFLIX_SAVE_MUTATION = """
+mutation ($mediaId: Int, $progress: Int, $status: MediaListStatus) {
+  SaveMediaListEntry(mediaId: $mediaId, progress: $progress, status: $status) {
+    id
+    mediaId
+    progress
+    status
+  }
+}
+"""
+
+
+class _NetflixFailure(Exception):
+    """A processing failure that ends the run with exit code 1."""
+
+
+def _netflix_rows(csv_path: str) -> list[tuple[str, str]]:
+    """Read the history strictly: any doubt exits 2 before a single API call."""
+    path = Path(csv_path).expanduser()
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        print(f"Error: cannot read {path}: {exc}", file=sys.stderr)
+        sys.exit(2)
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        print(f"Error: {path} is not valid UTF-8", file=sys.stderr)
+        sys.exit(2)
+    text = text.removeprefix("\ufeff")
+    rows: list[tuple[str, str]] = []
+    reader = csv.reader(io.StringIO(text, newline=""), strict=True)
+    header: list[str] | None = None
+    try:
+        for record in reader:
+            if header is None:
+                header = record
+                if tuple(header) != _NETFLIX_HEADER:
+                    expected = ",".join(_NETFLIX_HEADER)
+                    print(f"Error: expected header {expected}, got {','.join(header)}", file=sys.stderr)
+                    sys.exit(2)
+                continue
+            if len(record) != 2:
+                print(f"Error: expected 2 fields per row, got {len(record)}: {record}", file=sys.stderr)
+                sys.exit(2)
+            title, date = record[0].strip(), record[1].strip()
+            if not title or not date:
+                print(f"Error: empty title or date in row: {record}", file=sys.stderr)
+                sys.exit(2)
+            rows.append((title, date))
+    except csv.Error as exc:
+        print(f"Error: malformed CSV: {exc}", file=sys.stderr)
+        sys.exit(2)
+    if header is None:
+        print("Error: empty file, no header", file=sys.stderr)
+        sys.exit(2)
+    return rows
+
+
+def _netflix_identity(title: str) -> tuple[str, int] | None:
+    """Split '<release>: Episode <n>' right-anchored; anything else is unresolved."""
+    match = _NETFLIX_EPISODE.fullmatch(title)
+    if match is None:
+        return None
+    return match.group("release"), int(match.group("episode"))
+
+
+def _netflix_search(release: str, token: str) -> list[object]:
+    try:
+        response = gql_query(
+            _NETFLIX_SEARCH_QUERY,
+            {"search": release, "perPage": _NETFLIX_SEARCH_LIMIT},
+            token=token,
+        )
+    except Exception as exc:
+        raise _NetflixFailure(f"transport error: {exc}") from exc
+    if not isinstance(response, dict):
+        raise _NetflixFailure("malformed search response")
+    if response.get("errors"):
+        raise _NetflixFailure(f"GraphQL error: {response['errors']}")
+    data = response.get("data")
+    if not isinstance(data, dict):
+        raise _NetflixFailure("malformed search response: no data")
+    page = data.get("Page")
+    if not isinstance(page, dict):
+        raise _NetflixFailure("malformed search response: no Page")
+    media = page.get("media")
+    if not isinstance(media, list):
+        raise _NetflixFailure("malformed search response: no media list")
+    return media
+
+
+def _netflix_candidate(
+    candidate: object,
+) -> tuple[int, list[str], int | None, str | None]:
+    """Validate one candidate; a field we cannot trust fails the whole read closed."""
+    if not isinstance(candidate, dict):
+        raise _NetflixFailure("malformed candidate: not an object")
+    media_id = candidate.get("id")
+    if not isinstance(media_id, int) or isinstance(media_id, bool):
+        raise _NetflixFailure("malformed candidate: missing or non-integer id")
+    title = candidate.get("title")
+    if not isinstance(title, dict):
+        raise _NetflixFailure(f"malformed candidate {media_id}: title is not an object")
+    names: list[str] = []
+    for key in ("english", "romaji", "native"):
+        value = title.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise _NetflixFailure(f"malformed candidate {media_id}: title.{key} is not a string")
+        names.append(value)
+    synonyms = candidate.get("synonyms")
+    if synonyms is None:
+        synonyms = []
+    if not isinstance(synonyms, list) or any(not isinstance(name, str) for name in synonyms):
+        raise _NetflixFailure(f"malformed candidate {media_id}: synonyms is not a list of strings")
+    names.extend(synonyms)
+    episodes = candidate.get("episodes")
+    if episodes is not None and (not isinstance(episodes, int) or isinstance(episodes, bool)):
+        raise _NetflixFailure(f"malformed candidate {media_id}: episodes is not an integer")
+    media_format = candidate.get("format")
+    if media_format is not None and not isinstance(media_format, str):
+        raise _NetflixFailure(f"malformed candidate {media_id}: format is not a string")
+    return media_id, names, episodes, media_format
+
+
+def _netflix_read_state(media_id: int, token: str) -> dict | None:
+    """Read the current list entry; absence is None, anything unreadable fails closed."""
+    try:
+        response = gql_query(_NETFLIX_STATE_QUERY, {"mid": media_id}, token=token)
+    except Exception as exc:
+        raise _NetflixFailure(f"transport error: {exc}") from exc
+    if not isinstance(response, dict):
+        raise _NetflixFailure("malformed state response")
+    if response.get("errors"):
+        raise _NetflixFailure(f"GraphQL error: {response['errors']}")
+    data = response.get("data")
+    if not isinstance(data, dict) or "MediaList" not in data:
+        raise _NetflixFailure("malformed state response: no MediaList")
+    entry = data["MediaList"]
+    if entry is None:
+        return None
+    if not isinstance(entry, dict):
+        raise _NetflixFailure("malformed state response: MediaList is not an object")
+    status = entry.get("status")
+    if status not in _ANILIST_ENTRY_STATUSES:
+        raise _NetflixFailure(f"malformed state response: unknown status {status!r}")
+    progress = entry.get("progress")
+    if not isinstance(progress, int) or isinstance(progress, bool) or progress < 0:
+        raise _NetflixFailure(f"malformed state response: invalid progress {progress!r}")
+    return {"status": status, "progress": progress}
+
+
+def _netflix_infer(episodes: list[int]) -> int | None:
+    """Only a contiguous run starting at 1 supports an inferred progress."""
+    if not episodes:
+        return None
+    if episodes == list(range(1, episodes[-1] + 1)):
+        return episodes[-1]
+    return None
+
+
+def _netflix_decide(
+    state: dict | None,
+    inferred: int,
+    total: int | None,
+) -> tuple[str, int, str, str]:
+    """Decide against a state snapshot; returns (action, progress, status, reason)."""
+    if state is None:
+        return ("mutate", inferred, "CURRENT", "absent entry")
+    if state["status"] != "CURRENT":
+        return ("skip", 0, "", f"status policy: {state['status']} is preserved")
+    if state["progress"] > inferred:
+        return ("skip", 0, "", "unchanged: recorded progress is already ahead")
+    if isinstance(total, int) and not isinstance(total, bool) and total > 0 and inferred >= total:
+        return ("mutate", total, "COMPLETED", "full coverage")
+    if state["progress"] == inferred:
+        return ("skip", 0, "", "unchanged: already current")
+    return ("mutate", inferred, "CURRENT", "partial coverage")
+
+
+def _netflix_mutate(media_id: int, progress: int, status: str, token: str) -> None:
+    """Write one entry and refuse to call it done unless every field echoes back."""
+    try:
+        response = gql_query(
+            _NETFLIX_SAVE_MUTATION,
+            {"mediaId": media_id, "progress": progress, "status": status},
+            token=token,
+        )
+    except Exception as exc:
+        raise _NetflixFailure(f"transport error: {exc}") from exc
+    if not isinstance(response, dict):
+        raise _NetflixFailure("malformed mutation response")
+    if response.get("errors"):
+        raise _NetflixFailure(f"GraphQL error: {response['errors']}")
+    data = response.get("data")
+    if not isinstance(data, dict):
+        raise _NetflixFailure("malformed mutation response: no data")
+    entry = data.get("SaveMediaListEntry")
+    if not isinstance(entry, dict):
+        raise _NetflixFailure("mutation response has no entry")
+    if entry.get("mediaId") != media_id:
+        raise _NetflixFailure(f"mutation echoed mediaId {entry.get('mediaId')!r}, expected {media_id}")
+    echoed_progress = entry.get("progress")
+    if not isinstance(echoed_progress, int) or isinstance(echoed_progress, bool) or echoed_progress < 0:
+        raise _NetflixFailure(f"mutation echoed invalid progress {echoed_progress!r}")
+    if echoed_progress != progress:
+        raise _NetflixFailure(f"mutation echoed progress {echoed_progress}, expected {progress}")
+    if entry.get("status") != status:
+        raise _NetflixFailure(f"mutation echoed status {entry.get('status')!r}, expected {status}")
+
+
+def cmd_import_netflix(csv_path: str, *, apply: bool = False) -> None:
+    """Preview or apply a Netflix viewing-history CSV against AniList.
+
+    The CSV is read and validated in full before the first API call. Every row is
+    accounted for in the summary. Progress is only ever *inferred* from a
+    contiguous run of episodes starting at 1, never from a late or sparse set,
+    and a completion is only proposed when the inferred progress reaches a known
+    episode total. With ``apply`` every planned write is re-read immediately
+    before it is sent and verified field by field afterwards.
+    """
     token = get_token()
     if not token:
         print("Not logged in. Run 'ani-cli-sync login' first.", file=sys.stderr)
         sys.exit(1)
 
-    path = Path(csv_path).expanduser().resolve()
-    if not path.is_file():
-        print(f"Error: File not found at {path}", file=sys.stderr)
+    rows = _netflix_rows(csv_path)
+    if not rows:
+        print("input rows: 0 (zero events to import)")
+        return
+
+    failures = False
+    unresolved: list[tuple[str, str]] = []
+    groups: dict[str, list[tuple[int, str]]] = {}
+    for title, date in rows:
+        identity = _netflix_identity(title)
+        if identity is None:
+            unresolved.append((title, date))
+            continue
+        release, episode = identity
+        groups.setdefault(release, []).append((episode, date))
+
+    for title, _date in unresolved:
+        print(
+            f"{title} -> unresolved (unsupported title grammar, "
+            "expected '<release>: Episode <n>')"
+        )
+
+    plans: dict[int, dict] = {}
+    searches: dict[str, object] = {}
+    for release, items in groups.items():
+        if release not in searches:
+            try:
+                searches[release] = _netflix_search(release, token)
+            except _NetflixFailure as exc:
+                searches[release] = exc
+        candidates = searches[release]
+        if isinstance(candidates, _NetflixFailure):
+            failures = True
+            print(f"{release} -> error (search failed: {candidates})")
+            continue
+
+        matches: dict[int, dict] = {}
+        try:
+            for candidate in candidates:
+                media_id, names, episodes, media_format = _netflix_candidate(candidate)
+                if release not in names:
+                    continue
+                entry = matches.setdefault(media_id, {"episodes": episodes, "formats": set()})
+                if media_format:
+                    entry["formats"].add(media_format)
+        except _NetflixFailure as exc:
+            failures = True
+            print(f"{release} -> error (malformed candidate: {exc})")
+            continue
+
+        if len(matches) > 1 or (matches and len(candidates) >= _NETFLIX_SEARCH_LIMIT):
+            ids = ", ".join(str(media_id) for media_id in sorted(matches))
+            formats = sorted({fmt for entry in matches.values() for fmt in entry["formats"]})
+            format_note = f" formats: {', '.join(formats)}" if formats else ""
+            page_note = (
+                f" (full page, bounded to {_NETFLIX_SEARCH_LIMIT} results)"
+                if len(candidates) >= _NETFLIX_SEARCH_LIMIT
+                else ""
+            )
+            print(f"{release} -> ambiguous: {ids}{format_note}{page_note}")
+            continue
+        if not matches:
+            print(f"{release} -> unmatched")
+            continue
+
+        media_id, match = next(iter(matches.items()))
+        plan = plans.setdefault(
+            media_id,
+            {"episodes": set(), "dates": [], "releases": [], "rows": 0, "total": match["episodes"]},
+        )
+        plan["episodes"].update(episode for episode, _date in items)
+        plan["dates"].extend(date for _episode, date in items)
+        plan["releases"].append(release)
+        plan["rows"] += len(items)
+        if plan["total"] is None:
+            plan["total"] = match["episodes"]
+
+    for media_id, plan in plans.items():
+        label = " + ".join(plan["releases"])
+        episodes = sorted(plan["episodes"])
+        duplicates = plan["rows"] - len(episodes)
+        dedup_note = f" | dedup: {duplicates} duplicate row(s)" if duplicates > 0 else ""
+        head = (
+            f"{label} -> media {media_id} | recorded episodes: "
+            f"{', '.join(str(episode) for episode in episodes)}"
+            f" | dates: {', '.join(plan['dates'])}{dedup_note}"
+        )
+
+        inferred = _netflix_infer(episodes)
+        if inferred is None:
+            print(f"{head} | blocked: insufficient coverage (sparse or late-only episodes)")
+            continue
+
+        try:
+            state = _netflix_read_state(media_id, token)
+        except _NetflixFailure as exc:
+            failures = True
+            print(f"{head} | failed: state read: {exc}")
+            continue
+
+        action, progress, status, reason = _netflix_decide(
+            state, inferred, plan["total"]
+        )
+        if action == "skip":
+            print(f"{head} | inferred progress: {inferred} | {reason}")
+            continue
+        if not apply:
+            print(f"{head} | inferred progress: {inferred} | target status: {status} | preview")
+            continue
+
+        try:
+            fresh = _netflix_read_state(media_id, token)
+        except _NetflixFailure as exc:
+            failures = True
+            print(f"{head} | failed: fresh state read: {exc}")
+            continue
+        action, progress, status, reason = _netflix_decide(
+            fresh, inferred, plan["total"]
+        )
+        if action == "skip":
+            print(f"{head} | inferred progress: {inferred} | {reason}")
+            continue
+
+        try:
+            _netflix_mutate(media_id, progress, status, token)
+        except _NetflixFailure as exc:
+            failures = True
+            print(
+                f"{head} | inferred progress: {inferred} | target status: {status}"
+                f" | unverified: {exc}"
+            )
+            continue
+        print(f"{head} | inferred progress: {inferred} | target status: {status} | verified")
+
+    print(f"input rows: {len(rows)} (reconciled: {len(rows)})")
+    if failures:
         sys.exit(1)
-
-    print(f"Scanning Netflix viewing history from {path}...")
-    with open(path, mode="r", encoding="utf-8") as f:
-        reader = csv.reader(f)
-        next(reader, None)
-        entries_by_show: dict[str, list[tuple[str, str]]] = {}
-        for row in reader:
-            if not row:
-                continue
-            title, date = row[0], row[1]
-            parts = [p.strip() for p in title.split(":")]
-            show_name = parts[0]
-            entries_by_show.setdefault(show_name, []).append((title, date))
-
-    # Curated anime list mapping from Netflix names to AniList search
-    anime_whitelist = [
-        "Sousou no Frieren",
-        "Dungeon Meshi",
-        "Jujutsu Kaisen",
-        "PLUTO",
-        "Cyberpunk: Edgerunners",
-        "Dorohedoro",
-        "KonoSuba: God's Blessing on This Wonderful World!",
-        "Mushoku Tensei: Jobless Reincarnation",
-        "VINLAND SAGA",
-        "Castlevania",
-        "Blue Eye Samurai",
-        "Uncle from Another World",
-    ]
-
-    for anime_name in anime_whitelist:
-        matching_key = None
-        for key in entries_by_show:
-            if key.lower() in anime_name.lower() or anime_name.lower() in key.lower():
-                matching_key = key
-                break
-
-        if not matching_key:
-            continue
-
-        items = entries_by_show[matching_key]
-        media = search_anime(anime_name)
-        if not media:
-            continue
-
-        display_name = media["title"]["english"] or media["title"]["romaji"]
-        total_episodes = media["episodes"]
-        watched_count = len(items)
-        if total_episodes and watched_count >= total_episodes:
-            status = "COMPLETED"
-            progress = total_episodes
-        else:
-            status = "CURRENT"
-            progress = watched_count
-
-        update_progress(token, media["id"], progress, status=status)
-        total_str = str(total_episodes) if total_episodes else "?"
-        print(f"  ✓ {display_name}: {progress}/{total_str} [{status}]")
-        time.sleep(1.0)
-
-    print("\n✓ Netflix viewing history successfully imported to AniList!")
 
 
 # Episode offset table: (display_fragment, search_override | None, max_anilist_ep, scraper_offset)
@@ -1144,6 +1468,11 @@ def main() -> None:
     # import-netflix
     import_parser = subparsers.add_parser("import-netflix", help="Import watch history from Netflix CSV")
     import_parser.add_argument("csv_path", help="Path to NetflixViewingHistory.csv")
+    import_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Write the planned progress to AniList instead of only previewing it",
+    )
 
     # watch
     watch_parser = subparsers.add_parser("watch", help="Watch an anime and sync progress")
@@ -1217,7 +1546,7 @@ def main() -> None:
     elif args.command == "set":
         cmd_set(args.title, args.episode)
     elif args.command == "import-netflix":
-        cmd_import_netflix(args.csv_path)
+        cmd_import_netflix(args.csv_path, apply=args.apply)
     elif args.command == "watch":
         cmd_watch(
             query=args.query,
