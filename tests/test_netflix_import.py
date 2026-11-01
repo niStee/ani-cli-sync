@@ -17,7 +17,7 @@ def media(
     title: str,
     *,
     episodes: int | None = 12,
-    format: str = "TV",
+    media_format: str = "TV",
     synonyms: list[str] | None = None,
 ) -> dict:
     return {
@@ -25,7 +25,7 @@ def media(
         "title": {"english": title, "romaji": title, "native": title},
         "synonyms": synonyms or [],
         "episodes": episodes,
-        "format": format,
+        "format": media_format,
     }
 
 
@@ -420,7 +420,7 @@ class TestNetflixIdentityAndResolution(NetflixImportTestCase):
     def test_f10_remake_and_film_conflict_is_not_resolved_by_order_or_format(self) -> None:
         release = "Chrono Academy"
         fake = FakeAniList(
-            candidates={release: [media(101, release), media(202, release, format="MOVIE")]}
+            candidates={release: [media(101, release), media(202, release, media_format="MOVIE")]}
         )
         code, out, err, fake = self.invoke(f"Title,Date\n{release}: Episode 1,opaque\n", fake=fake)
         output = out + err
