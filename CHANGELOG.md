@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.10.1](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.10.0...ani-cli-sync-v0.10.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* use AniList duration fallback for autoplay ([#114](https://github.com/niStee/ani-cli-sync/issues/114)) ([5e454a0](https://github.com/niStee/ani-cli-sync/commit/5e454a0a21dec1998146977e2510947dae19b554))
+
+
+### Documentation
+
+* clarify subtitle translation requirements ([#110](https://github.com/niStee/ani-cli-sync/issues/110)) ([1c9a144](https://github.com/niStee/ani-cli-sync/commit/1c9a144f7d6988bd9dbcdd17ceac42e0796735a7))
+* plan Netflix viewing history import guide ([#109](https://github.com/niStee/ani-cli-sync/issues/109)) ([f63b1d0](https://github.com/niStee/ani-cli-sync/commit/f63b1d0dd0caa54967a7d7c1288893c688cc59d3))
+* plan upstream WSL native mpv support ([#111](https://github.com/niStee/ani-cli-sync/issues/111)) ([f88f1f9](https://github.com/niStee/ani-cli-sync/commit/f88f1f9e020724111ce35548846c3205a000ca52))
+* specify remaining capabilities ([#112](https://github.com/niStee/ani-cli-sync/issues/112)) ([6772912](https://github.com/niStee/ani-cli-sync/commit/6772912e6b8fbf75797ff5b114b38bd36b65a79c))
+
 ## [0.10.0](https://github.com/niStee/ani-cli-sync/compare/ani-cli-sync-v0.9.0...ani-cli-sync-v0.10.0) (2026-10-25)
 
 
