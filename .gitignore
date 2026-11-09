@@ -23,3 +23,6 @@ ENV/
 *.swp
 *.swo
 .gjc/
+
+# Claude Code per-user approvals: the file can hold pasted credentials, never commit it
+.claude/settings.local.json
